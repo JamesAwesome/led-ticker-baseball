@@ -395,7 +395,7 @@ class TestBaseballRotation:
 
 class TestHiresSnapRespectsIncomingBg:
     """The hires snap inside `render_hires_baseball_frame`
-    (`_snap_reset`) does its own bg-aware reset before drawing incoming
+    (`snap_reset`) does its own bg-aware reset before drawing incoming
     at t>=SNAP_THRESHOLD. Without it, the snap calls `canvas.Clear()`
     and the last transition frame paints incoming on black — clobbering
     the Fill(incoming_bg) that `run_transition` did one line earlier.
@@ -438,7 +438,7 @@ class TestHiresSnapRespectsIncomingBg:
         """End-to-end integration tripwire on the snap path. Drives
         `Baseball.frame_at(t=0.95)` through the hires dispatch (real
         ScaledCanvas → real `render_hires_baseball_frame` →
-        `_snap_reset`) with `incoming_bg_color` set, asserts the
+        `snap_reset`) with `incoming_bg_color` set, asserts the
         underlying real canvas saw `Fill(...)` and NOT `Clear()`.
 
         Baseball is fully procedural (no Pillow decode), so this test
@@ -470,10 +470,10 @@ class TestHiresSnapRespectsIncomingBg:
 
         # The snap must Fill, not Clear. Outgoing.draw and the trail
         # paint via SetPixel — those don't touch Fill/Clear. So any
-        # Fill call here came from _snap_reset.
+        # Fill call here came from snap_reset.
         assert real.Fill.called, (
             "Baseball hires snap did not call Fill — "
-            "`_snap_reset` regressed to `canvas.Clear()`"
+            "`snap_reset` regressed to `canvas.Clear()`"
         )
         real.Fill.assert_any_call(255, 230, 80)
         real.Clear.assert_not_called()
