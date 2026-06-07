@@ -404,33 +404,33 @@ class TestHiresSnapRespectsIncomingBg:
     def test_snap_clear_when_incoming_bg_is_none(self):
         """Default → snap calls Clear(). Legacy behavior preserved
         for transitions between two no-bg sections."""
-        from led_ticker_baseball.transition import _snap_reset
+        from led_ticker_baseball.transition import snap_reset
 
         canvas = mock.MagicMock()
-        _snap_reset(canvas, None)
+        snap_reset(canvas, None)
         canvas.Clear.assert_called_once_with()
         canvas.Fill.assert_not_called()
 
     def test_snap_fill_when_incoming_bg_set(self):
         """Tuple `(r, g, b)` → snap calls Fill(r, g, b) instead of
         Clear, so the snap-drawn incoming sits on the right bg."""
-        from led_ticker_baseball.transition import _snap_reset
+        from led_ticker_baseball.transition import snap_reset
 
         canvas = mock.MagicMock()
-        _snap_reset(canvas, (255, 230, 80))
+        snap_reset(canvas, (255, 230, 80))
         canvas.Fill.assert_called_once_with(255, 230, 80)
         canvas.Clear.assert_not_called()
 
     def test_snap_normalizes_graphics_color(self):
-        """`_snap_reset` accepts an un-normalized `graphics.Color` —
+        """`snap_reset` accepts an un-normalized `graphics.Color` —
         future direct callers that pass a widget's `bg_color` (which is
         a Color post-coercion) work without re-normalizing at every site."""
         from rgbmatrix.graphics import Color
 
-        from led_ticker_baseball.transition import _snap_reset
+        from led_ticker_baseball.transition import snap_reset
 
         canvas = mock.MagicMock()
-        _snap_reset(canvas, Color(42, 0, 16))
+        snap_reset(canvas, Color(42, 0, 16))
         canvas.Fill.assert_called_once_with(42, 0, 16)
         canvas.Clear.assert_not_called()
 
