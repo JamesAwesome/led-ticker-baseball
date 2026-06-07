@@ -21,20 +21,35 @@ The `:baseball.ball:` emoji (8×8 and the 32×32 hi-res upgrade on bigsign):
 
 ## Install
 
-Add the plugin to your sign's `config/requirements-plugins.txt` and rebuild:
+This plugin auto-registers via the `led_ticker.plugins` entry point — once the package is installed, no `[plugins]` config change is needed.
+
+**Into a containerized led-ticker (recommended):** the plugin is already listed in `config/requirements-plugins.example.txt`. Copy that to the live file and rebuild:
+
+```bash
+# in your led-ticker checkout
+cp config/requirements-plugins.example.txt config/requirements-plugins.txt
+docker compose up -d --build
+```
+
+That example file lists every first-party plugin — trim the live copy to just the ones you want. The baseball line is:
 
 ```text
 git+https://github.com/JamesAwesome/led-ticker-baseball.git@main
 ```
 
+**Standalone (a venv that already has led-ticker):**
+
 ```bash
-# in your led-ticker checkout, after editing requirements-plugins.txt
-docker compose up --build
+pip install "git+https://github.com/JamesAwesome/led-ticker-baseball.git@main"
 ```
 
-Entry points auto-register at startup, so once installed the `baseball.scores` / `baseball.standings` widgets, the `baseball.roll*` transitions, and the `:baseball.ball:` emoji are available with no extra config. See led-ticker's [Plugins](https://docs.ledticker.dev/plugins/) page for the full install flow.
+led-ticker isn't on PyPI, so this path only works where led-ticker is already installed. See the led-ticker [Plugins docs](https://docs.ledticker.dev/plugins/) for the constraint-based install the Docker image uses.
+
+Once installed, the `baseball.scores` / `baseball.standings` widgets, the `baseball.roll*` transitions, and the `:baseball.ball:` emoji are available automatically.
 
 ## Widgets
+
+Each widget below is a `[[playlist.section.widget]]` block you add inside a playlist section of your `config/config.toml`. New to led-ticker configs? The [first-config tutorial](https://docs.ledticker.dev/tutorial/02-first-config/) walks through the overall structure — the blocks here show just the baseball-specific keys.
 
 ### `baseball.scores`
 
@@ -48,12 +63,14 @@ Fetches live game state for a tracked team and renders its current series. Three
 [[playlist.section.widget]]
 type = "baseball.scores"
 team = "NYY"
-timezone = "America/New_York"
+timezone = "America/New_York"  # set to your local timezone
 ```
+
+**`team` is the only required field** — everything below is optional tuning.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `team` | string | required | Three-letter MLB abbreviation (e.g. `"NYY"`, `"LAD"`). Case-insensitive. |
+| `team` | string | required | MLB team abbreviation, 2–3 letters (e.g. `"NYY"`, `"KC"`, `"SD"`) — see [Team codes](#team-codes). Case-insensitive. |
 | `layout` | string | `"ticker"` | `"ticker"`, `"scoreboard"`, or `"two_row"`. |
 | `timezone` | string | `"America/New_York"` | IANA timezone for game-time formatting. |
 | `padding` | int | `6` | Horizontal padding (logical px) after each message when scrolling (ticker). |
@@ -83,6 +100,8 @@ Fetches overall MLB standings and scrolls them as `rank. TeamName W-L GB`, each 
 type = "baseball.standings"
 teams = ["NYY", "BOS"]
 ```
+
+**`teams` is the only required field** — everything below is optional.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
