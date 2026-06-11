@@ -2,6 +2,7 @@
 
 import datetime as dt
 import unittest.mock as mock
+from zoneinfo import ZoneInfo
 
 
 def _ctx(json_value):
@@ -332,3 +333,100 @@ class TestBuildPromoStories:
         widget = make_widget()
         stories = widget._build_promo_stories(gp(10, ["Pride Night"]), TODAY)
         assert stories[0].center is True
+
+
+NY = ZoneInfo("America/New_York")
+
+
+def probe_schedule(*games):
+    """Payload served to the 30-day fallback probe (gameType=R URL)."""
+    return {"dates": [{"games": list(games)}]}
+
+
+class TestStateSetters:
+    def test_default_title_is_team_name_plus_promos(self):
+        widget = make_widget()
+        widget._set_title()
+        texts = [t for t, _ in widget.feed_title.segments]
+        assert texts == ["Blue Jays", " Promos"]
+
+    def test_title_override(self):
+        widget = make_widget(title="Dog Watch")
+        widget._set_title()
+        assert widget.feed_title.text == "Dog Watch"
+
+    def test_error_state(self):
+        widget = make_widget()
+        widget._set_error_state()
+        assert len(widget.feed_stories) == 1
+        assert widget.feed_stories[0].text == "No Data"
+
+    def test_next_home_future(self):
+        widget = make_widget()
+        widget._set_next_home_state(dt.date(2026, 6, 22), TODAY)
+        assert widget.feed_stories[0].text == "Next home game: Jun 22"
+
+    def test_next_home_today(self):
+        widget = make_widget()
+        widget._set_next_home_state(TODAY, TODAY)
+        assert widget.feed_stories[0].text == "Home game today"
+
+    async def test_fallback_road_trip_finds_next_home(self):
+        session = make_session(
+            {"gameType=R": probe_schedule(make_game(141, "2026-06-26"))}
+        )
+        widget = make_widget(session=session)
+        await widget._set_fallback_state(NY, had_games=True)
+        assert widget.feed_stories[0].text == "Next home game: Jun 26"
+
+    async def test_fallback_road_trip_no_home_in_probe(self):
+        session = make_session(
+            {"gameType=R": probe_schedule(make_game(144, "2026-06-26"))}
+        )
+        widget = make_widget(session=session)
+        await widget._set_fallback_state(NY, had_games=True)
+        assert widget.feed_stories[0].text == "No home games soon"
+
+    async def test_fallback_offseason_opener_on_road(self):
+        session = make_session(
+            {"gameType=R": probe_schedule(make_game(144, "2027-03-28"))}
+        )
+        widget = make_widget(session=session)
+        await widget._set_fallback_state(NY, had_games=False)
+        assert widget.feed_stories[0].text == "Opens Mar 28"
+
+    async def test_fallback_offseason_no_games(self):
+        session = make_session({"gameType=R": {"dates": []}})
+        widget = make_widget(session=session)
+        await widget._set_fallback_state(NY, had_games=False)
+        assert widget.feed_stories[0].text == "Opens soon"
+
+    async def test_fallback_probe_failure_degrades(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("network down")
+        widget = make_widget(session=session)
+        await widget._set_fallback_state(NY, had_games=False)
+        assert widget.feed_stories[0].text == "Opens soon"
+
+    async def test_fallback_probe_json_failure_degrades(self):
+        resp = mock.AsyncMock()
+        resp.json.side_effect = ValueError("not json")
+        ctx = mock.AsyncMock()
+        ctx.__aenter__.return_value = resp
+        session = mock.MagicMock()
+        session.get.return_value = ctx
+        widget = make_widget(session=session)
+        await widget._set_fallback_state(NY, had_games=False)
+        assert widget.feed_stories[0].text == "Opens soon"
+
+    def test_font_color_override_selected_for_body(self):
+        from led_ticker.plugin import make_color
+
+        c = make_color(255, 0, 0)
+        widget = make_widget(font_color=c)
+        assert widget._body_color() is c
+
+    def test_default_body_color_is_white(self):
+        from led_ticker.colors import RGB_WHITE
+
+        assert make_widget()._body_color() is RGB_WHITE

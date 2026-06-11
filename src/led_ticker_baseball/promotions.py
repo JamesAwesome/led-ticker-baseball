@@ -10,7 +10,7 @@ import contextlib
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -25,6 +25,12 @@ from led_ticker.plugin import (
     TickerMessage,
     colors,
     make_color,
+)
+
+from led_ticker_baseball.teams import (
+    MLB_API,
+    MLB_TEAM_NAMES,
+    _team_color,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -204,3 +210,112 @@ class MLBPromotionsMonitor:
             )
             for name in ordered
         ]
+
+    def _set_title(self) -> None:
+        """Team-colored '<Team> Promos' title, or the configured override."""
+        if self.title:
+            t_c = self.font_color if self.font_color is not None else colors.RGB_WHITE
+            self.feed_title = TickerMessage(
+                self.title, font_color=t_c, center=True, bg_color=self.bg_color
+            )
+            return
+        team_name = MLB_TEAM_NAMES.get(self.team, self.team)
+        self.feed_title = SegmentMessage(
+            [(team_name, _team_color(self.team)), (" Promos", colors.RGB_WHITE)],
+            center=True,
+            bg_color=self.bg_color,
+            font=self.font,
+            font_color=self.font_color,
+        )
+
+    def _body_color(self) -> Color | ColorProvider:
+        return self.font_color if self.font_color is not None else colors.RGB_WHITE
+
+    # Contract for the _set_*_state setters below: they manage feed_stories
+    # only. update() calls _set_title() unconditionally before dispatching to
+    # any of them, so feed_title is always set — including on error paths.
+
+    def _set_error_state(self) -> None:
+        """Set display to error state."""
+        self.feed_stories = [
+            TickerMessage(
+                "No Data", font_color=self._body_color(), bg_color=self.bg_color
+            ),
+        ]
+        logger.info(
+            "MLB Promotions %s updated: %d stories (no data)",
+            self.team,
+            len(self.feed_stories),
+        )
+
+    def _set_next_home_state(self, game_date: date, today: date) -> None:
+        """Home games exist in the window but none had matching promos."""
+        if game_date == today:
+            text = "Home game today"
+        else:
+            text = f"Next home game: {game_date.strftime('%b %-d')}"
+        self.feed_stories = [
+            TickerMessage(
+                text,
+                font_color=self._body_color(),
+                center=True,
+                bg_color=self.bg_color,
+            ),
+        ]
+        logger.info("MLB Promotions %s updated: %s", self.team, text)
+
+    async def _set_fallback_state(self, tz: ZoneInfo, had_games: bool) -> None:
+        """No home games in the window: probe 30 days of regular season.
+
+        First home game → "Next home game: <date>". Otherwise ``had_games``
+        (the main window had away games → mid-season road trip) decides
+        between "No home games soon" and the offseason "Opens …" texts.
+        A failed probe degrades to the no-result text silently.
+        """
+        now = datetime.now(tz)
+        start = now.strftime("%Y-%m-%d")
+        end = (now + timedelta(days=30)).strftime("%Y-%m-%d")
+        url = (
+            f"{MLB_API}/schedule?teamId={self._team_id}"
+            f"&startDate={start}&endDate={end}&sportId=1&gameType=R"
+        )
+        data: dict[str, Any] = {}
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Promotions probe failed for %s", self.team)
+
+        first_any: date | None = None
+        first_home: date | None = None
+        for date_entry in data.get("dates", []):
+            for g in date_entry.get("games", []):
+                d = _game_local_date(g, tz)
+                if d is None:
+                    continue
+                if first_any is None or d < first_any:
+                    first_any = d
+                home = g.get("teams", {}).get("home", {}).get("team", {})
+                if home.get("id") == self._team_id and (
+                    first_home is None or d < first_home
+                ):
+                    first_home = d
+
+        if first_home is not None:
+            text = f"Next home game: {first_home.strftime('%b %-d')}"
+        elif had_games:
+            text = "No home games soon"
+        elif first_any is not None:
+            text = f"Opens {first_any.strftime('%b %-d')}"
+        else:
+            text = "Opens soon"
+
+        self.feed_stories = [
+            TickerMessage(
+                text,
+                font_color=self._body_color(),
+                center=True,
+                bg_color=self.bg_color,
+            ),
+        ]
+        logger.info("MLB Promotions %s updated: fallback (%s)", self.team, text)
