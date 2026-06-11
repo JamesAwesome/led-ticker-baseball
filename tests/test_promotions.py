@@ -543,3 +543,40 @@ class TestUpdate:
             if r.levelno == logging.INFO and "promotions" in r.message.lower()
         ]
         assert matching, f"expected INFO log; got {[r.message for r in caplog.records]}"
+
+
+class TestValidateConfig:
+    def _validate(self, cfg):
+        from led_ticker_baseball.promotions import MLBPromotionsMonitor
+
+        return MLBPromotionsMonitor.validate_config(cfg)
+
+    def test_clean_config_passes(self):
+        assert (
+            self._validate({"team": "TOR", "highlight": ["Loonie Dogs"], "limit": 3})
+            == []
+        )
+
+    def test_negative_limit_rejected(self):
+        msgs = self._validate({"team": "TOR", "limit": -1})
+        assert len(msgs) == 1
+        assert "limit" in msgs[0]
+
+    def test_non_int_limit_rejected(self):
+        msgs = self._validate({"team": "TOR", "limit": "3"})
+        assert len(msgs) == 1
+        assert "limit" in msgs[0]
+
+    def test_string_filter_rejected(self):
+        msgs = self._validate({"team": "TOR", "filter": "Loonie Dogs"})
+        assert len(msgs) == 1
+        assert "filter" in msgs[0]
+
+    def test_string_highlight_rejected(self):
+        msgs = self._validate({"team": "TOR", "highlight": "Loonie Dogs"})
+        assert len(msgs) == 1
+        assert "highlight" in msgs[0]
+
+    def test_messages_returned_not_raised(self):
+        msgs = self._validate({"team": "TOR", "limit": -1, "filter": "x"})
+        assert len(msgs) == 2

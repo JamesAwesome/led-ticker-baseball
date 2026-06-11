@@ -130,6 +130,32 @@ class MLBPromotionsMonitor:
     )
 
     @classmethod
+    def validate_config(cls, cfg: dict[str, Any]) -> list[str]:
+        """Pre-coercion config check, run by the engine via validate_widget_cfg.
+
+        Returns message strings (does NOT raise); the engine turns any
+        returned messages into a pre-flight ValueError. Same contract as
+        ``MLBScoreMonitor.validate_config``.
+        """
+        msgs: list[str] = []
+
+        limit = cfg.get("limit", 0)
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            msgs.append(f"promotions limit={limit!r} must be a non-negative integer.")
+
+        for key in ("filter", "highlight"):
+            if key not in cfg:
+                continue
+            val = cfg[key]
+            if not isinstance(val, list) or not all(isinstance(v, str) for v in val):
+                msgs.append(
+                    f"promotions {key}={val!r} must be a list of strings, "
+                    f'e.g. {key} = ["Loonie Dogs"].'
+                )
+
+        return msgs
+
+    @classmethod
     async def start(
         cls,
         session: aiohttp.ClientSession,
