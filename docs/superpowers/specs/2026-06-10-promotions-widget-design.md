@@ -32,7 +32,7 @@ uses only `name`.
 ### Config
 
 ```toml
-[[sections.widgets]]
+[[playlist.section.widget]]
 type = "baseball.promotions"
 team = "TOR"                         # required — team abbreviation
 highlight = ["Loonie Dogs"]          # optional — callout color + sort first
@@ -79,9 +79,14 @@ update_interval = 21600              # optional — seconds between refreshes (6
 
 | Condition | Display |
 | --- | --- |
-| Home games in window, none with matching promos | `Next home game: Jun 22` (earliest home game in window) |
-| No games at all in window (offseason) | `Opens <date>` via a 30-day opening-day probe (`gameType=R`), `Opens soon` beyond that — same UX as the standings widget |
+| Home games in window, none with matching promos | `Next home game: Jun 22` (earliest home game in window; `Home game today` when that game is today) |
+| Games in window but none at home (road trip longer than `lookahead_days`) | 30-day probe (`gameType=R`): first home game → `Next home game: <date>`, else `No home games soon` |
+| No games at all in window (offseason) | Same 30-day probe: first home game → `Next home game: <date>`, else first game of any kind → `Opens <date>` (season opens on the road), else `Opens soon` — same UX shape as the standings widget |
 | API/parse failure | `No Data` — same pattern as the standings widget |
+
+The road-trip and offseason rows share one fallback probe; whether the main
+window had any games at all (home or away) decides between the
+`No home games soon` and `Opens …` texts.
 
 All empty/error states keep the normal `feed_title` so the section stays
 labeled.
@@ -140,9 +145,10 @@ Classmethod with the same contract as `MLBScoreMonitor.validate_config`
 
 ### Error handling
 
-Any request/parse exception → log via `logger.exception`, set the "No Data"
-error state, return. Identical pattern to the standings widget; a failed
-opening-day probe degrades to "Opens soon" silently (debug log only).
+Any request/parse exception on the main schedule fetch → log via
+`logger.exception`, set the "No Data" error state, return. Identical pattern
+to the standings widget. A failed fallback probe degrades silently (debug log
+only) to `No home games soon` / `Opens soon` per the empty-state table.
 
 ## Docs
 
