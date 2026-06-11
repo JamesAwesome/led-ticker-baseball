@@ -1,11 +1,11 @@
-"""Shared MLB team data + lazy color palette.
+"""Shared MLB team data, lazy color palette, and team-ID resolution.
 
-This module owns the data tables and color helpers that both the scores
-widget (`scores.py`) and the standings widget (`standings.py`) depend on:
+This module owns what the scores, standings, and promotions widgets share:
 the MLB API base URLs, the per-team primary-color / name tables, the
-name->abbreviation lookup, the lazy WIN/LOSS/LIVE/CHALLENGE palette, and the
-color helpers built on top of them. Keeping them here means standings no
-longer reaches into the scores widget for shared data.
+name->abbreviation lookup, the lazy WIN/LOSS/LIVE/CHALLENGE palette, the
+color helpers built on top of them, and the async `resolve_team_id()`
+abbreviation->ID lookup. Keeping them here means no widget reaches into
+another widget for shared data.
 """
 
 import logging

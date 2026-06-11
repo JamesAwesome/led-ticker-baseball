@@ -45,15 +45,15 @@ Python **3.14+** only.
 src/led_ticker_baseball/
   __init__.py     # register(api) entry point — the only place names are registered
   emoji.py        # :baseball.ball: — lo-res 8×8 (BALL) + procedural hi-res 32×32 (BALL_HIRES)
-  teams.py        # shared MLB team colors/names/abbr tables + lazy WIN/LOSS/LIVE/CHALLENGE palette
+  teams.py        # shared MLB team colors/names/abbr tables, lazy palette, async resolve_team_id()
   scores.py       # baseball.scores widget (MLBScoreMonitor); ticker/scoreboard/two_row; game-state machine
   standings.py    # baseball.standings widget (MLBStandingsMonitor); top-N + tracked teams; offseason awareness
   promotions.py   # baseball.promotions widget (MLBPromotionsMonitor); home-game promos; today-first + fallback states
   transition.py   # baseball.roll* family; lo-res 4-frame + procedural hi-res rotation
 ```
 
-`scores.py` and `standings.py` both import the shared tables from `teams.py` (standings does
-not reach into the scores widget). `transition.py` reuses the hi-res sprite generator from
+All three widget modules import the shared tables from `teams.py` (no widget reaches into
+another widget). `transition.py` reuses the hi-res sprite generator from
 `emoji.py`. These sibling intra-package imports are allowed; see the import contract below.
 
 `register(api)` (in `__init__.py`):

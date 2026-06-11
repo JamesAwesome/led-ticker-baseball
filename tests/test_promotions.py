@@ -335,6 +335,20 @@ class TestBuildPromoStories:
         stories = widget._build_promo_stories(gp(10, ["Pride Night"]), TODAY)
         assert stories[0].center is True
 
+    def test_plain_font_color_tints_names_not_callouts(self):
+        from led_ticker.plugin import make_color
+
+        c = make_color(0, 255, 0)
+        widget = make_widget(highlight=["loonie"], font_color=c)
+        stories = widget._build_promo_stories(
+            gp(10, ["Loonie Dogs Night", "Pride Night"]), TODAY
+        )
+        amber = stories[0].segments[1][1]
+        assert (amber.red, amber.green, amber.blue) == (255, 200, 60)
+        assert stories[1].segments[1][1] is c
+        grey = stories[1].segments[0][1]
+        assert (grey.red, grey.green, grey.blue) == (150, 150, 150)
+
 
 NY = ZoneInfo("America/New_York")
 

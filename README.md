@@ -146,7 +146,7 @@ highlight = ["Loonie Dogs"]
 | `timezone` | string | `"America/New_York"` | IANA timezone governing "Today" and date labels. |
 | `padding` | int | `6` | Horizontal padding (logical px) after each message when scrolling. |
 | `bg_color` | RGB list | none | Background fill behind all messages. |
-| `font_color` | RGB list / string / table | unset | Override body text color; date labels and highlights keep their callout colors. |
+| `font_color` | RGB list / string / table | unset | RGB list tints the promo names; the date prefix and amber highlights keep their callout colors. A string/table provider overrides all text, as in the other widgets. |
 | `font` | string | `"6x12"` | Display font. Hires name needs `font_size`. |
 
 With nothing to show, the widget falls back to `Next home game: Jun 22`
@@ -155,7 +155,7 @@ With nothing to show, the widget falls back to `Next home game: Jun 22`
 
 ## Team codes
 
-All 30 teams (shared by both widgets):
+All 30 teams (shared by all three widgets):
 
 `ARI` D-backs · `ATL` Braves · `BAL` Orioles · `BOS` Red Sox · `CHC` Cubs · `CIN` Reds · `CLE` Guardians · `COL` Rockies · `CWS` White Sox · `DET` Tigers · `HOU` Astros · `KC` Royals · `LAA` Angels · `LAD` Dodgers · `MIA` Marlins · `MIL` Brewers · `MIN` Twins · `NYM` Mets · `NYY` Yankees · `OAK` Athletics · `PHI` Phillies · `PIT` Pirates · `SD` Padres · `SEA` Mariners · `SF` Giants · `STL` Cardinals · `TB` Rays · `TEX` Rangers · `TOR` Blue Jays · `WSH` Nationals
 

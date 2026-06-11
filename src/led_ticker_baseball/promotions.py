@@ -283,6 +283,15 @@ class MLBPromotionsMonitor:
         )
         date_c = make_color(150, 150, 150)  # grey — date label
         highlight_c = make_color(255, 200, 60)  # amber — highlighted promo
+        # A plain-Color font_color tints the promo names while the date/amber
+        # callouts keep their colors. Providers (color_for) can't color a
+        # single segment; they pass through font_color= below and override
+        # every segment in core, same as the sibling widgets.
+        body_c = (
+            self.font_color
+            if self.font_color is not None and not hasattr(self.font_color, "color_for")
+            else colors.RGB_WHITE
+        )
 
         highlighted = [p for p in target.promos if _match_any(p, self.highlight)]
         rest = [p for p in target.promos if p not in highlighted]
@@ -296,7 +305,7 @@ class MLBPromotionsMonitor:
                     (f"{label} · ", date_c),
                     (
                         name,
-                        highlight_c if name in highlighted else colors.RGB_WHITE,
+                        highlight_c if name in highlighted else body_c,
                     ),
                 ],
                 center=True,
