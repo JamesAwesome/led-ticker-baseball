@@ -15,6 +15,7 @@ used to live in led-ticker core (`type = "mlb"`):
 
 - `baseball.scores` — live/final/preview scores; `ticker`, `scoreboard`, or `two_row` layout.
 - `baseball.standings` — scrolling division standings (top-N + tracked teams), offseason-aware.
+- `baseball.promotions` — upcoming home-game promotions (giveaways/theme nights); today-first with highlight/filter/limit knobs and offseason-aware fallbacks.
 - `baseball.roll` / `baseball.roll_reverse` / `baseball.roll_alternating` — a rolling-baseball
   sprite transition (lo-res 4-frame; procedural hi-res on the bigsign).
 - `:baseball.ball:` — inline emoji (8×8 lo-res + 32×32 procedural hi-res).
@@ -47,6 +48,7 @@ src/led_ticker_baseball/
   teams.py        # shared MLB team colors/names/abbr tables + lazy WIN/LOSS/LIVE/CHALLENGE palette
   scores.py       # baseball.scores widget (MLBScoreMonitor); ticker/scoreboard/two_row; game-state machine
   standings.py    # baseball.standings widget (MLBStandingsMonitor); top-N + tracked teams; offseason awareness
+  promotions.py   # baseball.promotions widget (MLBPromotionsMonitor); home-game promos; today-first + fallback states
   transition.py   # baseball.roll* family; lo-res 4-frame + procedural hi-res rotation
 ```
 
@@ -60,6 +62,7 @@ not reach into the scores widget). `transition.py` reuses the hi-res sprite gene
 def register(api):
     api.widget("scores")(MLBScoreMonitor)
     api.widget("standings")(MLBStandingsMonitor)
+    api.widget("promotions")(MLBPromotionsMonitor)
     api.transition("roll")(Baseball)
     api.transition("roll_reverse")(BaseballReverse)
     api.transition("roll_alternating")(BaseballAlternating)
@@ -117,8 +120,8 @@ rotations at 45° (90° reads as alternating; 22.5° reads chaotic on small pane
   violation, not a test to relax.
 - `test_smoke.py` — loads the plugin through led-ticker's real plugin loader and asserts the
   widgets/transitions/emoji register under the `baseball.*` namespace (entry-point wiring guard).
-- `test_scores.py` / `test_scoreboard.py` / `test_standings.py` / `test_transition.py` /
-  `test_emoji.py` / `test_lazy_palette.py` — behavior + rendering coverage.
+- `test_scores.py` / `test_scoreboard.py` / `test_standings.py` / `test_promotions.py` /
+  `test_transition.py` / `test_emoji.py` / `test_lazy_palette.py` — behavior + rendering coverage.
 
 CI (`.github/workflows/ci.yml`): checks out this repo + led-ticker as siblings (deploy key),
 Python 3.14, `uv sync --extra dev`, then `ruff check src tests` and `pytest -q`.
