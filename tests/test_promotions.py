@@ -246,3 +246,89 @@ class TestParseHomeGames:
         games, had_games = self._parse(data)
         assert games == []
         assert had_games is True
+
+
+def gp(day, promos):
+    """GamePromos in June 2026 shorthand."""
+    from led_ticker_baseball.promotions import GamePromos
+
+    return GamePromos(game_date=dt.date(2026, 6, day), promos=list(promos))
+
+
+TODAY = dt.date(2026, 6, 10)
+
+
+class TestPickTarget:
+    def test_today_preferred_over_future(self):
+        widget = make_widget()
+        target = widget._pick_target(
+            [gp(10, ["Loonie Dogs Night"]), gp(23, ["Pride Night"])], TODAY
+        )
+        assert target.game_date == TODAY
+
+    def test_earliest_future_when_today_empty(self):
+        widget = make_widget()
+        target = widget._pick_target([gp(10, []), gp(23, ["Pride Night"])], TODAY)
+        assert target.game_date == dt.date(2026, 6, 23)
+
+    def test_filter_skips_non_matching_games(self):
+        widget = make_widget(filter=["loonie"])
+        target = widget._pick_target(
+            [gp(10, ["Pride Night"]), gp(23, ["Loonie Dogs Night"])], TODAY
+        )
+        assert target.game_date == dt.date(2026, 6, 23)
+        assert target.promos == ["Loonie Dogs Night"]
+
+    def test_none_when_no_matches(self):
+        widget = make_widget(filter=["bobblehead"])
+        assert widget._pick_target([gp(10, ["Pride Night"])], TODAY) is None
+
+
+class TestBuildPromoStories:
+    def test_today_label(self):
+        widget = make_widget()
+        stories = widget._build_promo_stories(gp(10, ["Loonie Dogs Night"]), TODAY)
+        assert len(stories) == 1
+        texts = [t for t, _ in stories[0].segments]
+        assert texts[0] == "Today · "
+        assert texts[1] == "Loonie Dogs Night"
+
+    def test_future_date_label(self):
+        widget = make_widget()
+        stories = widget._build_promo_stories(gp(23, ["Pride Night"]), TODAY)
+        texts = [t for t, _ in stories[0].segments]
+        assert texts[0] == "Jun 23 · "
+
+    def test_highlight_sorts_first_and_renders_amber(self):
+        widget = make_widget(highlight=["loonie"])
+        stories = widget._build_promo_stories(
+            gp(10, ["Pride Night", "Loonie Dogs Night"]), TODAY
+        )
+        first_texts = [t for t, _ in stories[0].segments]
+        assert first_texts[1] == "Loonie Dogs Night"
+        name_color = stories[0].segments[1][1]
+        assert (name_color.red, name_color.green, name_color.blue) == (255, 200, 60)
+        # Non-highlighted promo stays white
+        from led_ticker.colors import RGB_WHITE
+
+        assert stories[1].segments[1][1] is RGB_WHITE
+
+    def test_limit_applied_after_highlight_sort(self):
+        widget = make_widget(highlight=["pride"], limit=1)
+        stories = widget._build_promo_stories(
+            gp(10, ["Loonie Dogs Night", "Pride Night"]), TODAY
+        )
+        assert len(stories) == 1
+        assert stories[0].segments[1][0] == "Pride Night"
+
+    def test_zero_limit_means_all(self):
+        widget = make_widget(limit=0)
+        stories = widget._build_promo_stories(
+            gp(10, ["Loonie Dogs Night", "Pride Night"]), TODAY
+        )
+        assert len(stories) == 2
+
+    def test_stories_centered(self):
+        widget = make_widget()
+        stories = widget._build_promo_stories(gp(10, ["Pride Night"]), TODAY)
+        assert stories[0].center is True

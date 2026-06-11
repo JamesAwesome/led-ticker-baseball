@@ -23,6 +23,8 @@ from led_ticker.plugin import (
     Font,
     SegmentMessage,
     TickerMessage,
+    colors,
+    make_color,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -147,3 +149,58 @@ class MLBPromotionsMonitor:
             for d, names in sorted(by_date.items())
         ]
         return games, had_games
+
+    def _apply_filter(self, promos: list[str]) -> list[str]:
+        """Keep only promos matching the filter keywords (all when unset)."""
+        if not self.filter:
+            return list(promos)
+        return [p for p in promos if _match_any(p, self.filter)]
+
+    def _pick_target(self, games: list[GamePromos], today: date) -> GamePromos | None:
+        """First game on/after today with post-filter promos (today wins)."""
+        for game in games:
+            if game.game_date < today:
+                continue
+            matches = self._apply_filter(game.promos)
+            if matches:
+                return GamePromos(game_date=game.game_date, promos=matches)
+        return None
+
+    def _build_promo_stories(
+        self, target: GamePromos, today: date
+    ) -> list[SegmentMessage]:
+        """One centered story per promo: '<Today|Jun 22> · <name>'.
+
+        Highlighted promos render amber and sort first; ``limit`` truncates
+        AFTER that sort so highlights are never the lines dropped.
+        """
+        label = (
+            "Today"
+            if target.game_date == today
+            else target.game_date.strftime("%b %-d")
+        )
+        date_c = make_color(150, 150, 150)  # grey — date label
+        highlight_c = make_color(255, 200, 60)  # amber — highlighted promo
+
+        highlighted = [p for p in target.promos if _match_any(p, self.highlight)]
+        rest = [p for p in target.promos if p not in highlighted]
+        ordered = highlighted + rest
+        if self.limit > 0:
+            ordered = ordered[: self.limit]
+
+        return [
+            SegmentMessage(
+                [
+                    (f"{label} · ", date_c),
+                    (
+                        name,
+                        highlight_c if name in highlighted else colors.RGB_WHITE,
+                    ),
+                ],
+                center=True,
+                bg_color=self.bg_color,
+                font=self.font,
+                font_color=self.font_color,
+            )
+            for name in ordered
+        ]
