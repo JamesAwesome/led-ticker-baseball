@@ -120,8 +120,8 @@ teams = ["NYY", "BOS"]
 Upcoming home-game promotions — giveaways and theme nights, e.g. the Blue Jays'
 Loonie Dogs Night — for a tracked team, from the schedule API's promotions feed.
 Shows today's promos when there's a home game today, otherwise the next home
-game's, one scrolling line per promo with a grey date prefix:
-`Jun 22 · Retro Domer Hat Giveaway`. Sponsor tails ("presented by …") are
+game's, one scrolling line per promo led by the team abbreviation in its brand
+color, with a grey date prefix: `TOR Jun 22 · Retro Domer Hat Giveaway`. Sponsor tails ("presented by …") are
 stripped, and near-duplicate feed entries are collapsed. Promos matching
 `highlight` render in amber and sort first.
 
@@ -146,12 +146,12 @@ highlight = ["Loonie Dogs"]
 | `timezone` | string | `"America/New_York"` | IANA timezone governing "Today" and date labels. |
 | `padding` | int | `6` | Horizontal padding (logical px) after each message when scrolling. |
 | `bg_color` | RGB list | none | Background fill behind all messages. |
-| `font_color` | RGB list / string / table | unset | RGB list tints the promo names; the date prefix and amber highlights keep their callout colors. A string/table provider overrides all text, as in the other widgets. |
+| `font_color` | RGB list / string / table | unset | RGB list tints the promo names; the team prefix, date label, and amber highlights keep their callout colors. A string/table provider overrides all text, as in the other widgets. |
 | `font` | string | `"6x12"` | Display font. Hires name needs `font_size`. |
 
-With nothing to show, the widget falls back to `Next home game: Jun 22`
-(promo-free homestand), `No home games soon` (road trip), or
-`Opens <date>` / `Opens soon` (offseason).
+With nothing to show, the widget falls back to a team-prefixed
+`Next home game: Jun 22` (promo-free homestand), `No home games soon`
+(road trip), or `Opens <date>` / `Opens soon` (offseason).
 
 ## Team codes
 

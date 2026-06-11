@@ -271,27 +271,23 @@ class MLBPromotionsMonitor:
     def _build_promo_stories(
         self, target: GamePromos, today: date
     ) -> list[TickerMessage | SegmentMessage]:
-        """One centered story per promo: '<Today|Jun 22> · <name>'.
+        """One centered story per promo: 'TOR <Today|Jun 22> · <name>'.
 
-        Highlighted promos render amber and sort first; ``limit`` truncates
-        AFTER that sort so highlights are never the lines dropped.
+        Every line leads with the team abbreviation in its brand color —
+        stories scroll independently, so each must identify its team without
+        relying on the section title. Highlighted promos render amber and
+        sort first; ``limit`` truncates AFTER that sort so highlights are
+        never the lines dropped.
         """
         label = (
             "Today"
             if target.game_date == today
             else target.game_date.strftime("%b %-d")
         )
+        team_c = _team_color(self.team)
         date_c = make_color(150, 150, 150)  # grey — date label
         highlight_c = make_color(255, 200, 60)  # amber — highlighted promo
-        # A plain-Color font_color tints the promo names while the date/amber
-        # callouts keep their colors. Providers (color_for) can't color a
-        # single segment; they pass through font_color= below and override
-        # every segment in core, same as the sibling widgets.
-        body_c = (
-            self.font_color
-            if self.font_color is not None and not hasattr(self.font_color, "color_for")
-            else colors.RGB_WHITE
-        )
+        body_c = self._plain_body_color()
 
         highlighted = [p for p in target.promos if _match_any(p, self.highlight)]
         rest = [p for p in target.promos if p not in highlighted]
@@ -302,6 +298,7 @@ class MLBPromotionsMonitor:
         return [
             SegmentMessage(
                 [
+                    (f"{self.team} ", team_c),
                     (f"{label} · ", date_c),
                     (
                         name,
@@ -336,17 +333,39 @@ class MLBPromotionsMonitor:
     def _body_color(self) -> Color | ColorProvider:
         return self.font_color if self.font_color is not None else colors.RGB_WHITE
 
+    def _plain_body_color(self) -> Color | ColorProvider:
+        """Body-text color for per-segment use.
+
+        A plain-Color ``font_color`` tints body text while callout segments
+        (team prefix, date label, amber highlight) keep their colors.
+        Providers (``color_for``) can't color a single segment; they pass
+        through ``font_color=`` on the message instead, which overrides every
+        segment in core — same as the sibling widgets.
+        """
+        if self.font_color is not None and not hasattr(self.font_color, "color_for"):
+            return self.font_color
+        return colors.RGB_WHITE
+
+    def _story_line(self, text: str) -> SegmentMessage:
+        """Single status line led by the team abbreviation in its brand color."""
+        return SegmentMessage(
+            [
+                (f"{self.team} ", _team_color(self.team)),
+                (text, self._plain_body_color()),
+            ],
+            center=True,
+            bg_color=self.bg_color,
+            font=self.font,
+            font_color=self.font_color,
+        )
+
     # Contract for the _set_*_state setters below: they manage feed_stories
     # only. update() calls _set_title() unconditionally before dispatching to
     # any of them, so feed_title is always set — including on error paths.
 
     def _set_error_state(self) -> None:
         """Set display to error state."""
-        self.feed_stories = [
-            TickerMessage(
-                "No Data", font_color=self._body_color(), bg_color=self.bg_color
-            ),
-        ]
+        self.feed_stories = [self._story_line("No Data")]
         logger.info(
             "MLB Promotions %s updated: %d stories (no data)",
             self.team,
@@ -359,14 +378,7 @@ class MLBPromotionsMonitor:
             text = "Home game today"
         else:
             text = f"Next home game: {game_date.strftime('%b %-d')}"
-        self.feed_stories = [
-            TickerMessage(
-                text,
-                font_color=self._body_color(),
-                center=True,
-                bg_color=self.bg_color,
-            ),
-        ]
+        self.feed_stories = [self._story_line(text)]
         logger.info("MLB Promotions %s updated: %s", self.team, text)
 
     async def _set_fallback_state(self, tz: ZoneInfo, had_games: bool) -> None:
@@ -415,12 +427,5 @@ class MLBPromotionsMonitor:
         else:
             text = "Opens soon"
 
-        self.feed_stories = [
-            TickerMessage(
-                text,
-                font_color=self._body_color(),
-                center=True,
-                bg_color=self.bg_color,
-            ),
-        ]
+        self.feed_stories = [self._story_line(text)]
         logger.info("MLB Promotions %s updated: fallback (%s)", self.team, text)

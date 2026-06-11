@@ -189,6 +189,11 @@ def make_widget(**kwargs):
     return widget
 
 
+def line_text(story):
+    """Full visible text of a segment story line."""
+    return "".join(seg[0] for seg in story.segments)
+
+
 class TestParseHomeGames:
     def _parse(self, data):
         from zoneinfo import ZoneInfo
@@ -292,14 +297,14 @@ class TestBuildPromoStories:
         stories = widget._build_promo_stories(gp(10, ["Loonie Dogs Night"]), TODAY)
         assert len(stories) == 1
         texts = [t for t, _ in stories[0].segments]
-        assert texts[0] == "Today · "
-        assert texts[1] == "Loonie Dogs Night"
+        assert texts == ["TOR ", "Today · ", "Loonie Dogs Night"]
 
     def test_future_date_label(self):
         widget = make_widget()
         stories = widget._build_promo_stories(gp(23, ["Pride Night"]), TODAY)
         texts = [t for t, _ in stories[0].segments]
-        assert texts[0] == "Jun 23 · "
+        assert texts[0] == "TOR "
+        assert texts[1] == "Jun 23 · "
 
     def test_highlight_sorts_first_and_renders_amber(self):
         widget = make_widget(highlight=["loonie"])
@@ -307,13 +312,13 @@ class TestBuildPromoStories:
             gp(10, ["Pride Night", "Loonie Dogs Night"]), TODAY
         )
         first_texts = [t for t, _ in stories[0].segments]
-        assert first_texts[1] == "Loonie Dogs Night"
-        name_color = stories[0].segments[1][1]
+        assert first_texts[2] == "Loonie Dogs Night"
+        name_color = stories[0].segments[2][1]
         assert (name_color.red, name_color.green, name_color.blue) == (255, 200, 60)
         # Non-highlighted promo stays white
         from led_ticker.colors import RGB_WHITE
 
-        assert stories[1].segments[1][1] is RGB_WHITE
+        assert stories[1].segments[2][1] is RGB_WHITE
 
     def test_limit_applied_after_highlight_sort(self):
         widget = make_widget(highlight=["pride"], limit=1)
@@ -321,7 +326,7 @@ class TestBuildPromoStories:
             gp(10, ["Loonie Dogs Night", "Pride Night"]), TODAY
         )
         assert len(stories) == 1
-        assert stories[0].segments[1][0] == "Pride Night"
+        assert stories[0].segments[2][0] == "Pride Night"
 
     def test_zero_limit_means_all(self):
         widget = make_widget(limit=0)
@@ -343,11 +348,22 @@ class TestBuildPromoStories:
         stories = widget._build_promo_stories(
             gp(10, ["Loonie Dogs Night", "Pride Night"]), TODAY
         )
-        amber = stories[0].segments[1][1]
+        amber = stories[0].segments[2][1]
         assert (amber.red, amber.green, amber.blue) == (255, 200, 60)
-        assert stories[1].segments[1][1] is c
-        grey = stories[1].segments[0][1]
+        assert stories[1].segments[2][1] is c
+        grey = stories[1].segments[1][1]
         assert (grey.red, grey.green, grey.blue) == (150, 150, 150)
+
+    def test_team_prefix_leads_each_line_in_brand_color(self):
+        from led_ticker.colors import RGB_WHITE
+
+        widget = make_widget()
+        stories = widget._build_promo_stories(
+            gp(10, ["Loonie Dogs Night", "Pride Night"]), TODAY
+        )
+        for story in stories:
+            assert story.segments[0][0] == "TOR "
+            assert story.segments[0][1] is not RGB_WHITE
 
 
 NY = ZoneInfo("America/New_York")
@@ -374,17 +390,17 @@ class TestStateSetters:
         widget = make_widget()
         widget._set_error_state()
         assert len(widget.feed_stories) == 1
-        assert widget.feed_stories[0].text == "No Data"
+        assert line_text(widget.feed_stories[0]) == "TOR No Data"
 
     def test_next_home_future(self):
         widget = make_widget()
         widget._set_next_home_state(dt.date(2026, 6, 22), TODAY)
-        assert widget.feed_stories[0].text == "Next home game: Jun 22"
+        assert line_text(widget.feed_stories[0]) == "TOR Next home game: Jun 22"
 
     def test_next_home_today(self):
         widget = make_widget()
         widget._set_next_home_state(TODAY, TODAY)
-        assert widget.feed_stories[0].text == "Home game today"
+        assert line_text(widget.feed_stories[0]) == "TOR Home game today"
 
     async def test_fallback_road_trip_finds_next_home(self):
         session = make_session(
@@ -392,7 +408,7 @@ class TestStateSetters:
         )
         widget = make_widget(session=session)
         await widget._set_fallback_state(NY, had_games=True)
-        assert widget.feed_stories[0].text == "Next home game: Jun 26"
+        assert line_text(widget.feed_stories[0]) == "TOR Next home game: Jun 26"
 
     async def test_fallback_road_trip_no_home_in_probe(self):
         session = make_session(
@@ -400,7 +416,7 @@ class TestStateSetters:
         )
         widget = make_widget(session=session)
         await widget._set_fallback_state(NY, had_games=True)
-        assert widget.feed_stories[0].text == "No home games soon"
+        assert line_text(widget.feed_stories[0]) == "TOR No home games soon"
 
     async def test_fallback_offseason_opener_on_road(self):
         session = make_session(
@@ -408,20 +424,20 @@ class TestStateSetters:
         )
         widget = make_widget(session=session)
         await widget._set_fallback_state(NY, had_games=False)
-        assert widget.feed_stories[0].text == "Opens Mar 28"
+        assert line_text(widget.feed_stories[0]) == "TOR Opens Mar 28"
 
     async def test_fallback_offseason_no_games(self):
         session = make_session({"gameType=R": {"dates": []}})
         widget = make_widget(session=session)
         await widget._set_fallback_state(NY, had_games=False)
-        assert widget.feed_stories[0].text == "Opens soon"
+        assert line_text(widget.feed_stories[0]) == "TOR Opens soon"
 
     async def test_fallback_probe_failure_degrades(self):
         session = mock.MagicMock()
         session.get.side_effect = RuntimeError("network down")
         widget = make_widget(session=session)
         await widget._set_fallback_state(NY, had_games=False)
-        assert widget.feed_stories[0].text == "Opens soon"
+        assert line_text(widget.feed_stories[0]) == "TOR Opens soon"
 
     async def test_fallback_probe_json_failure_degrades(self):
         resp = mock.AsyncMock()
@@ -432,7 +448,7 @@ class TestStateSetters:
         session.get.return_value = ctx
         widget = make_widget(session=session)
         await widget._set_fallback_state(NY, had_games=False)
-        assert widget.feed_stories[0].text == "Opens soon"
+        assert line_text(widget.feed_stories[0]) == "TOR Opens soon"
 
     def test_font_color_override_selected_for_body(self):
         from led_ticker.plugin import make_color
@@ -480,7 +496,7 @@ class TestUpdate:
         with patcher:
             await widget.update()
         texts = [t for t, _ in widget.feed_stories[0].segments]
-        assert texts == ["Today · ", "Loonie Dogs Night"]
+        assert texts == ["TOR ", "Today · ", "Loonie Dogs Night"]
         assert widget.feed_title is not None
 
     async def test_future_home_game_when_today_empty(self):
@@ -492,7 +508,8 @@ class TestUpdate:
         with patcher:
             await widget.update()
         texts = [t for t, _ in widget.feed_stories[0].segments]
-        assert texts[0] == f"{future.strftime('%b %-d')} · "
+        assert texts[0] == "TOR "
+        assert texts[1] == f"{future.strftime('%b %-d')} · "
 
     async def test_no_matching_promos_shows_next_home_game(self):
         patcher, today = _freeze_today()
@@ -503,8 +520,8 @@ class TestUpdate:
         )
         with patcher:
             await widget.update()
-        assert widget.feed_stories[0].text == (
-            f"Next home game: {future.strftime('%b %-d')}"
+        assert line_text(widget.feed_stories[0]) == (
+            f"TOR Next home game: {future.strftime('%b %-d')}"
         )
 
     async def test_road_trip_routes_to_fallback(self):
@@ -516,14 +533,14 @@ class TestUpdate:
         )
         with patcher:
             await widget.update()
-        assert widget.feed_stories[0].text == (
-            f"Next home game: {home_date.strftime('%b %-d')}"
+        assert line_text(widget.feed_stories[0]) == (
+            f"TOR Next home game: {home_date.strftime('%b %-d')}"
         )
 
     async def test_empty_schedule_routes_to_offseason_fallback(self):
         widget = self._widget({"dates": []}, probe_payload={"dates": []})
         await widget.update()
-        assert widget.feed_stories[0].text == "Opens soon"
+        assert line_text(widget.feed_stories[0]) == "TOR Opens soon"
 
     async def test_api_error_sets_no_data(self):
         session = mock.MagicMock()
@@ -531,13 +548,13 @@ class TestUpdate:
         widget = make_widget(session=session)
         widget._tz = NY
         await widget.update()
-        assert widget.feed_stories[0].text == "No Data"
+        assert line_text(widget.feed_stories[0]) == "TOR No Data"
 
     async def test_unresolved_team_id_sets_no_data(self):
         widget = self._widget(make_schedule())
         widget._team_id = 0
         await widget.update()
-        assert widget.feed_stories[0].text == "No Data"
+        assert line_text(widget.feed_stories[0]) == "TOR No Data"
 
     async def test_update_logs_info(self, caplog):
         patcher, today = _freeze_today()
