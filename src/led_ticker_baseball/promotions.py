@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Self
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -25,15 +25,20 @@ from led_ticker.plugin import (
     TickerMessage,
     colors,
     make_color,
+    run_monitor_loop,
+    spawn_tracked,
 )
 
 from led_ticker_baseball.teams import (
     MLB_API,
     MLB_TEAM_NAMES,
     _team_color,
+    resolve_team_id,
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+_INTERVAL_SIX_HOURS: int = 21600
 
 # "Loonie Dogs Night presented by Schneiders" → "Loonie Dogs Night"
 _SPONSOR_RE: re.Pattern[str] = re.compile(
@@ -124,6 +129,71 @@ class MLBPromotionsMonitor:
         init=False, factory=list
     )
 
+    @classmethod
+    async def start(
+        cls,
+        session: aiohttp.ClientSession,
+        team: str,
+        update_interval: int = _INTERVAL_SIX_HOURS,
+        **kwargs: Any,
+    ) -> Self:
+        logger.debug("MLBPromotionsMonitor.start: team=%s", team)
+        widget = cls(session=session, team=team.upper(), **kwargs)
+        widget._tz = ZoneInfo(widget.timezone)
+        widget._team_id = await resolve_team_id(session, widget.team) or 0
+        await widget.update()
+        logger.info(
+            "MLB Promotions %s: %d stories",
+            widget.team,
+            len(widget.feed_stories),
+        )
+        spawn_tracked(run_monitor_loop(widget, update_interval))
+        return widget
+
+    async def update(self) -> None:
+        """Fetch the promotions-hydrated schedule and build display messages."""
+        tz = self._tz or ZoneInfo(self.timezone)
+        today = datetime.now(tz).date()
+        self._set_title()
+
+        if not self._team_id:
+            self._set_error_state()
+            return
+
+        start = today.strftime("%Y-%m-%d")
+        end = (today + timedelta(days=self.lookahead_days)).strftime("%Y-%m-%d")
+        url = (
+            f"{MLB_API}/schedule?teamId={self._team_id}"
+            f"&startDate={start}&endDate={end}&sportId=1"
+            f"&hydrate=game(promotions)"
+        )
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+            games, had_games = self._parse_home_games(data, tz)
+        except Exception:
+            logger.exception("MLB Promotions API error for %s", self.team)
+            self._set_error_state()
+            return
+
+        if not games:
+            await self._set_fallback_state(tz, had_games)
+            return
+
+        target = self._pick_target(games, today)
+        if target is None:
+            # games is sorted and the query starts at today, so [0] is the
+            # earliest upcoming home game.
+            self._set_next_home_state(games[0].game_date, today)
+            return
+
+        self.feed_stories = self._build_promo_stories(target, today)
+        logger.info(
+            "MLB Promotions %s updated: %d stories",
+            self.team,
+            len(self.feed_stories),
+        )
+
     def _parse_home_games(
         self, data: dict[str, Any], tz: ZoneInfo
     ) -> tuple[list[GamePromos], bool]:
@@ -174,7 +244,7 @@ class MLBPromotionsMonitor:
 
     def _build_promo_stories(
         self, target: GamePromos, today: date
-    ) -> list[SegmentMessage]:
+    ) -> list[TickerMessage | SegmentMessage]:
         """One centered story per promo: '<Today|Jun 22> · <name>'.
 
         Highlighted promos render amber and sort first; ``limit`` truncates

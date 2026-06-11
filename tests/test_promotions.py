@@ -1,6 +1,7 @@
 """Tests for the MLB promotions widget and the shared resolve_team_id helper."""
 
 import datetime as dt
+import logging
 import unittest.mock as mock
 from zoneinfo import ZoneInfo
 
@@ -430,3 +431,115 @@ class TestStateSetters:
         from led_ticker.colors import RGB_WHITE
 
         assert make_widget()._body_color() is RGB_WHITE
+
+
+def _freeze_today():
+    """(patcher, today) freezing promotions.datetime.now at the current time.
+
+    Fixtures dated from `today` and update()'s own now() call could otherwise
+    straddle midnight; the frozen mock wraps the real datetime so classmethods
+    like fromisoformat still work.
+    """
+    now = dt.datetime.now(NY)
+    frozen = mock.Mock(wraps=dt.datetime)
+    frozen.now.return_value = now
+    patcher = mock.patch("led_ticker_baseball.promotions.datetime", frozen)
+    return patcher, now.date()
+
+
+class TestUpdate:
+    def _widget(self, schedule_payload, probe_payload=None, **kwargs):
+        routes = {"hydrate=game(promotions)": schedule_payload}
+        if probe_payload is not None:
+            routes["gameType=R"] = probe_payload
+        widget = make_widget(session=make_session(routes), **kwargs)
+        widget._tz = NY
+        return widget
+
+    async def test_today_home_game_with_promos(self):
+        patcher, today = _freeze_today()
+        widget = self._widget(
+            make_schedule(
+                make_game(141, today.isoformat(), promos=["Loonie Dogs Night"])
+            )
+        )
+        with patcher:
+            await widget.update()
+        texts = [t for t, _ in widget.feed_stories[0].segments]
+        assert texts == ["Today · ", "Loonie Dogs Night"]
+        assert widget.feed_title is not None
+
+    async def test_future_home_game_when_today_empty(self):
+        patcher, today = _freeze_today()
+        future = today + dt.timedelta(days=5)
+        widget = self._widget(
+            make_schedule(make_game(141, future.isoformat(), promos=["Pride Night"]))
+        )
+        with patcher:
+            await widget.update()
+        texts = [t for t, _ in widget.feed_stories[0].segments]
+        assert texts[0] == f"{future.strftime('%b %-d')} · "
+
+    async def test_no_matching_promos_shows_next_home_game(self):
+        patcher, today = _freeze_today()
+        future = today + dt.timedelta(days=5)
+        widget = self._widget(
+            make_schedule(make_game(141, future.isoformat(), promos=["Pride Night"])),
+            filter=["bobblehead"],
+        )
+        with patcher:
+            await widget.update()
+        assert widget.feed_stories[0].text == (
+            f"Next home game: {future.strftime('%b %-d')}"
+        )
+
+    async def test_road_trip_routes_to_fallback(self):
+        patcher, today = _freeze_today()
+        home_date = today + dt.timedelta(days=20)
+        widget = self._widget(
+            make_schedule(make_game(144, today.isoformat())),  # away game only
+            probe_payload=probe_schedule(make_game(141, home_date.isoformat())),
+        )
+        with patcher:
+            await widget.update()
+        assert widget.feed_stories[0].text == (
+            f"Next home game: {home_date.strftime('%b %-d')}"
+        )
+
+    async def test_empty_schedule_routes_to_offseason_fallback(self):
+        widget = self._widget({"dates": []}, probe_payload={"dates": []})
+        await widget.update()
+        assert widget.feed_stories[0].text == "Opens soon"
+
+    async def test_api_error_sets_no_data(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("network down")
+        widget = make_widget(session=session)
+        widget._tz = NY
+        await widget.update()
+        assert widget.feed_stories[0].text == "No Data"
+
+    async def test_unresolved_team_id_sets_no_data(self):
+        widget = self._widget(make_schedule())
+        widget._team_id = 0
+        await widget.update()
+        assert widget.feed_stories[0].text == "No Data"
+
+    async def test_update_logs_info(self, caplog):
+        patcher, today = _freeze_today()
+        widget = self._widget(
+            make_schedule(
+                make_game(141, today.isoformat(), promos=["Loonie Dogs Night"])
+            )
+        )
+        with (
+            patcher,
+            caplog.at_level(logging.INFO, logger="led_ticker_baseball.promotions"),
+        ):
+            await widget.update()
+        matching = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and "promotions" in r.message.lower()
+        ]
+        assert matching, f"expected INFO log; got {[r.message for r in caplog.records]}"
