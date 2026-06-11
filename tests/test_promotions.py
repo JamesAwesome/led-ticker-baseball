@@ -1,5 +1,6 @@
 """Tests for the MLB promotions widget and the shared resolve_team_id helper."""
 
+import datetime as dt
 import unittest.mock as mock
 
 
@@ -132,7 +133,6 @@ class TestMatchAny:
 
 class TestGameLocalDate:
     def test_official_date_preferred(self):
-        import datetime as dt
         from zoneinfo import ZoneInfo
 
         from led_ticker_baseball.promotions import _game_local_date
@@ -142,7 +142,6 @@ class TestGameLocalDate:
         assert _game_local_date(g, tz) == dt.date(2026, 6, 23)
 
     def test_game_date_fallback_converts_timezone(self):
-        import datetime as dt
         from zoneinfo import ZoneInfo
 
         from led_ticker_baseball.promotions import _game_local_date
@@ -158,3 +157,92 @@ class TestGameLocalDate:
         from led_ticker_baseball.promotions import _game_local_date
 
         assert _game_local_date({}, ZoneInfo("America/New_York")) is None
+
+
+def make_game(home_id, official_date, promos=()):
+    """Minimal schedule-game payload. home_id 141 = TOR (the tested team)."""
+    return {
+        "officialDate": official_date,
+        "teams": {
+            "home": {"team": {"id": home_id}},
+            "away": {"team": {"id": 999}},
+        },
+        "promotions": [{"name": n} for n in promos],
+    }
+
+
+def make_schedule(*games):
+    return {"dates": [{"games": list(games)}]}
+
+
+def make_widget(**kwargs):
+    from led_ticker_baseball.promotions import MLBPromotionsMonitor
+
+    widget = MLBPromotionsMonitor(
+        session=kwargs.pop("session", mock.Mock()),
+        team="TOR",
+        **kwargs,
+    )
+    widget._team_id = 141
+    return widget
+
+
+class TestParseHomeGames:
+    def _parse(self, data):
+        from zoneinfo import ZoneInfo
+
+        widget = make_widget()
+        return widget._parse_home_games(data, ZoneInfo("America/New_York"))
+
+    def test_home_games_only(self):
+        data = make_schedule(
+            make_game(141, "2026-06-23", promos=["Loonie Dogs Night"]),
+            make_game(144, "2026-06-24", promos=["Bobblehead Giveaway"]),  # away
+        )
+        games, had_games = self._parse(data)
+        assert had_games is True
+        assert len(games) == 1
+        assert games[0].promos == ["Loonie Dogs Night"]
+
+    def test_promos_cleaned_and_deduped(self):
+        data = make_schedule(
+            make_game(
+                141,
+                "2026-06-10",
+                promos=[
+                    "Dylan Cease Bobblehead Giveaway Night",
+                    "Dylan Cease Bobblehead Giveaway presented by Rogers",
+                ],
+            ),
+        )
+        games, _ = self._parse(data)
+        assert games[0].promos == ["Dylan Cease Bobblehead Giveaway"]
+
+    def test_doubleheader_promos_merged_by_date(self):
+        data = make_schedule(
+            make_game(141, "2026-06-23", promos=["Loonie Dogs Night"]),
+            make_game(141, "2026-06-23", promos=["Pride Night"]),
+        )
+        games, _ = self._parse(data)
+        assert len(games) == 1
+        assert games[0].game_date == dt.date(2026, 6, 23)
+        assert games[0].promos == ["Loonie Dogs Night", "Pride Night"]
+
+    def test_sorted_by_date(self):
+        data = make_schedule(
+            make_game(141, "2026-06-30", promos=["Loonie Dogs Night"]),
+            make_game(141, "2026-06-23", promos=["Pride Night"]),
+        )
+        games, _ = self._parse(data)
+        assert [g.game_date.day for g in games] == [23, 30]
+
+    def test_empty_schedule(self):
+        games, had_games = self._parse({"dates": []})
+        assert games == []
+        assert had_games is False
+
+    def test_away_only_sets_had_games(self):
+        data = make_schedule(make_game(144, "2026-06-24"))
+        games, had_games = self._parse(data)
+        assert games == []
+        assert had_games is True
