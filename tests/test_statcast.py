@@ -305,3 +305,143 @@ class TestBuildStatStories:
         widget = make_widget(stats=["longest_hr"])
         stories = widget._build_stat_stories({"longest_hr": rec(463)}, "Today", {})
         assert stories[0].center is True
+
+
+def _ctx(payload):
+    """Async-context response mock: str payloads serve .text(), dicts .json()."""
+    resp = mock.AsyncMock()
+    if isinstance(payload, str):
+        resp.text.return_value = payload
+    else:
+        resp.json.return_value = payload
+    ctx = mock.AsyncMock()
+    ctx.__aenter__.return_value = resp
+    return ctx
+
+
+def make_session(routes):
+    """Mock aiohttp session routing by URL substring; first match wins."""
+    session = mock.MagicMock()
+
+    def side_effect(url, *args, **kwargs):
+        for key, payload in routes.items():
+            if key in url:
+                return _ctx(payload)
+        return _ctx({})
+
+    session.get.side_effect = side_effect
+    return session
+
+
+_CSV_COLS = [
+    "release_speed",
+    "batter",
+    "pitcher",
+    "events",
+    "description",
+    "home_team",
+    "away_team",
+    "inning_topbot",
+    "launch_speed",
+    "hit_distance_sc",
+    "pitch_name",
+]
+
+
+def make_csv(*rows):
+    """Savant-shaped CSV text, BOM included like the real endpoint."""
+    lines = [",".join(_CSV_COLS)]
+    for r in rows:
+        lines.append(",".join(str(r.get(c, "")) for c in _CSV_COLS))
+    return "﻿" + "\n".join(lines) + "\n"
+
+
+def sched_game(state):
+    return {"status": {"abstractGameState": state}}
+
+
+class TestFetchScheduleCounts:
+    async def test_counts_live_and_final(self):
+        session = make_session(
+            {
+                "sportId=1&date=": {
+                    "dates": [
+                        {
+                            "games": [
+                                sched_game("Live"),
+                                sched_game("Final"),
+                                sched_game("Final"),
+                                sched_game("Preview"),
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+        widget = make_widget(session=session)
+        assert await widget._fetch_schedule_counts(TODAY) == (1, 2)
+
+    async def test_failure_returns_none(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("network down")
+        widget = make_widget(session=session)
+        assert await widget._fetch_schedule_counts(TODAY) is None
+
+
+class TestDeriveDay:
+    async def test_parses_bom_csv_and_derives(self):
+        csv_text = make_csv(hr(463, batter=11), row(release_speed=101.8, pitcher=30))
+        session = make_session({"statcast_search": csv_text})
+        widget = make_widget(session=session)
+        records = await widget._derive_day(TODAY)
+        assert records["longest_hr"].value == 463.0
+        assert records["fastest_pitch"].person_id == 30
+
+    async def test_sends_user_agent(self):
+        session = make_session({"statcast_search": make_csv()})
+        widget = make_widget(session=session)
+        await widget._derive_day(TODAY)
+        savant_calls = [
+            c for c in session.get.call_args_list if "statcast_search" in c.args[0]
+        ]
+        ua = savant_calls[0].kwargs["headers"]["User-Agent"]
+        assert ua.startswith("led-ticker-baseball")
+
+    async def test_requests_the_given_day(self):
+        session = make_session({"statcast_search": make_csv()})
+        widget = make_widget(session=session)
+        await widget._derive_day(dt.date(2026, 6, 11))
+        url = session.get.call_args_list[0].args[0]
+        assert "game_date_gt=2026-06-11" in url
+        assert "game_date_lt=2026-06-11" in url
+
+
+class TestResolveNames:
+    async def test_resolves_last_names(self):
+        session = make_session(
+            {
+                "/people": {
+                    "people": [
+                        {"id": 10, "lastName": "Butler"},
+                        {"id": 30, "lastName": "Misiorowski"},
+                    ]
+                }
+            }
+        )
+        widget = make_widget(session=session)
+        assert await widget._resolve_names({10, 30}) == {
+            10: "Butler",
+            30: "Misiorowski",
+        }
+
+    async def test_empty_ids_no_request(self):
+        session = make_session({})
+        widget = make_widget(session=session)
+        assert await widget._resolve_names({0}) == {}
+        session.get.assert_not_called()
+
+    async def test_failure_returns_empty(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("network down")
+        widget = make_widget(session=session)
+        assert await widget._resolve_names({10}) == {}

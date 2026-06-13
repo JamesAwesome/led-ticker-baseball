@@ -7,6 +7,8 @@ gated on the (tiny) StatsAPI day schedule so off-hours refreshes skip the
 3 MB pull. Stateless: every refresh re-derives from the full day so far.
 """
 
+import csv
+import io
 import logging
 from dataclasses import dataclass
 from datetime import date
@@ -26,9 +28,17 @@ from led_ticker.plugin import (
     make_color,
 )
 
-from led_ticker_baseball.teams import _team_color
+from led_ticker_baseball.teams import MLB_API, _team_color
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+SAVANT_CSV_URL: str = (
+    "https://baseballsavant.mlb.com/statcast_search/csv"
+    "?all=true&type=details&game_date_gt={day}&game_date_lt={day}"
+)
+_USER_AGENT: str = (
+    "led-ticker-baseball (+https://github.com/JamesAwesome/led-ticker-baseball)"
+)
 
 _STAT_KEYS: tuple[str, ...] = (
     "longest_hr",
@@ -210,6 +220,53 @@ class MLBStatcastMonitor:
         snap_day, snap_final = self._last_derive
         live, final = counts
         return snap_day == today and live == 0 and final == snap_final
+
+    async def _fetch_schedule_counts(self, day: date) -> tuple[int, int] | None:
+        """(live, final) game counts for the day; None on failure (fail open)."""
+        url = f"{MLB_API}/schedule?sportId=1&date={day.isoformat()}"
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Statcast schedule gate fetch failed")
+            return None
+        live = final = 0
+        for date_entry in data.get("dates", []):
+            for g in date_entry.get("games", []):
+                state = g.get("status", {}).get("abstractGameState")
+                live += state == "Live"
+                final += state == "Final"
+        return live, final
+
+    async def _derive_day(self, day: date) -> dict[str, StatRecord]:
+        """Fetch the Savant day CSV and derive the requested records.
+
+        Raises on fetch failure — the caller owns the error state. The CSV
+        ships a UTF-8 BOM; strip it before DictReader sees the header row.
+        """
+        url = SAVANT_CSV_URL.format(day=day.isoformat())
+        async with self.session.get(url, headers={"User-Agent": _USER_AGENT}) as resp:
+            text = await resp.text()
+        rows = list(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
+        return _derive_records(rows, self.stats)
+
+    async def _resolve_names(self, person_ids: set[int]) -> dict[int, str]:
+        """Batched StatsAPI lookup: person id → last name; {} on failure."""
+        ids = sorted(i for i in person_ids if i)
+        if not ids:
+            return {}
+        url = f"{MLB_API}/people?personIds={','.join(map(str, ids))}"
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Statcast name lookup failed")
+            return {}
+        return {
+            p["id"]: p.get("lastName", "")
+            for p in data.get("people", [])
+            if p.get("id")
+        }
 
     def _build_stat_stories(
         self,
