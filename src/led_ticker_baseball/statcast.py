@@ -41,6 +41,9 @@ SAVANT_CSV_URL: str = (
 _USER_AGENT: str = (
     "led-ticker-baseball (+https://github.com/JamesAwesome/led-ticker-baseball)"
 )
+# Cap the ~3 MB Savant pull well under aiohttp's 300 s default; a timeout
+# degrades cleanly to the "No Data" state via update()'s except block.
+_SAVANT_TIMEOUT_S: int = 30
 
 _INTERVAL_THIRTY_MIN: int = 1800
 
@@ -326,7 +329,17 @@ class MLBStatcastMonitor:
         ships a UTF-8 BOM; strip it before DictReader sees the header row.
         """
         url = SAVANT_CSV_URL.format(day=day.isoformat())
-        async with self.session.get(url, headers={"User-Agent": _USER_AGENT}) as resp:
+        async with self.session.get(
+            url,
+            headers={"User-Agent": _USER_AGENT},
+            timeout=aiohttp.ClientTimeout(total=_SAVANT_TIMEOUT_S),
+        ) as resp:
+            # Savant is undocumented and rate-limits; aiohttp does not raise on
+            # 4xx/5xx, so an HTML error page or "Too Many Requests" body would
+            # otherwise parse to zero rows and masquerade as an off-day. Raise
+            # instead so update() routes it to the "No Data" error state, per
+            # this method's contract.
+            resp.raise_for_status()
             text = await resp.text()
         rows = list(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
         return _derive_records(rows, self.stats)
@@ -355,7 +368,7 @@ class MLBStatcastMonitor:
         day_label: str,
         names: dict[int, str],
     ) -> list[TickerMessage | SegmentMessage]:
-        """One centered line per stat: 'Today · Longest HR 463 ft — Butler ATH'.
+        """One centered line per stat: 'Today · Longest HR 463 ft — Butler OAK'.
 
         Lines are self-contained (day label, stat, value, record holder, team
         abbr in brand color) — stories scroll independently of the title.

@@ -75,7 +75,7 @@ One story per selected stat, each self-contained (story lines must identify
 their subject inline — section titles scroll away):
 
 ```
-Today · Longest HR 463 ft — Butler ATH
+Today · Longest HR 463 ft — Butler OAK
 Today · Hardest hit 113.4 mph — Tatis Jr. SD
 Today · Fastest pitch 101.8 mph — Misiorowski MIL
 Today · Slowest pitch 69.6 mph (Slow Curve) — Pederson KC
@@ -89,7 +89,7 @@ Segments and colors:
 | stat label (`Longest HR `) | white / plain `font_color` tint (same `_plain_body_color` semantics as promotions) |
 | value (`463 ft`, `101.8 mph`) | amber `make_color(255, 200, 60)` |
 | ` — <LastName> ` | white / plain `font_color` tint |
-| team abbr (`ATH`) | `_team_color(abbr)` — white fallback for abbreviations missing from `MLB_TEAM_COLORS` (Savant uses e.g. `ATH`) |
+| team abbr (`OAK`) | `_team_color(abbr)`. Savant's `ATH`/`AZ` codes are normalized to the plugin's `OAK`/`ARI` (see `_SAVANT_ABBR`) so the abbr and color match the other widgets; abbreviations still missing from `MLB_TEAM_COLORS` fall back to white. |
 
 - Batter stats name the batter; pitch stats name the pitcher. Last names from
   the `/people` lookup; on lookup failure the line renders without the name

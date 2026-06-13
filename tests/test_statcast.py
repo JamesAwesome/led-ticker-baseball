@@ -131,6 +131,17 @@ class TestDeriveRecords:
         records = self._derive([hr(440, batter=10), hr(440, batter=11)])
         assert records["longest_hr"].person_id == 10
 
+    def test_slowest_pitch_tie_keeps_first_row(self):
+        # The lower=True comparison path must also keep the first row on ties.
+        records = self._derive(
+            [
+                row(release_speed=69.6, pitcher=40),
+                row(release_speed=69.6, pitcher=41),
+            ],
+            stats=["slowest_pitch"],
+        )
+        assert records["slowest_pitch"].person_id == 40
+
     def test_missing_values_skipped(self):
         records = self._derive([row(events="home_run", hit_distance_sc="")])
         assert "longest_hr" not in records
@@ -278,17 +289,28 @@ class TestBuildStatStories:
         assert line_text(stories[0]) == "Yest · Longest HR 463 ft — TOR"
 
     def test_colors_day_grey_value_amber_team_branded(self):
-        from led_ticker.colors import RGB_WHITE
+        from led_ticker_baseball.teams import _team_color
 
-        widget = make_widget(stats=["longest_hr"])
+        widget = make_widget(stats=["longest_hr", "fastest_pitch"])
         stories = widget._build_stat_stories(
-            {"longest_hr": rec(463)}, "Today", {10: "Butler"}
+            {
+                "longest_hr": rec(463, team="TOR"),
+                "fastest_pitch": rec(101.8, team="MIL"),
+            },
+            "Today",
+            {10: "Butler"},
         )
         segs = stories[0].segments
         day_c, value_c, team_c = segs[0][1], segs[2][1], segs[-1][1]
         assert (day_c.red, day_c.green, day_c.blue) == (150, 150, 150)
         assert (value_c.red, value_c.green, value_c.blue) == (255, 200, 60)
-        assert team_c is not RGB_WHITE  # TOR brand color
+        # Exact brand color, not merely "not white" — and per-team, so a wrong
+        # attribution or hardcoded default would fail.
+        tor = _team_color("TOR")
+        assert (team_c.red, team_c.green, team_c.blue) == (tor.red, tor.green, tor.blue)
+        mil_c = stories[1].segments[-1][1]
+        mil = _team_color("MIL")
+        assert (mil_c.red, mil_c.green, mil_c.blue) == (mil.red, mil.green, mil.blue)
 
     def test_plain_font_color_tints_body_not_callouts(self):
         from led_ticker.plugin import make_color
@@ -312,6 +334,9 @@ class TestBuildStatStories:
 def _ctx(payload):
     """Async-context response mock: str payloads serve .text(), dicts .json()."""
     resp = mock.AsyncMock()
+    # raise_for_status() is synchronous on real aiohttp responses; a plain
+    # Mock keeps it a no-op (no un-awaited coroutine) for success fixtures.
+    resp.raise_for_status = mock.Mock()
     if isinstance(payload, str):
         resp.text.return_value = payload
     else:
@@ -447,6 +472,22 @@ class TestResolveNames:
         session.get.side_effect = RuntimeError("network down")
         widget = make_widget(session=session)
         assert await widget._resolve_names({10}) == {}
+
+    async def test_missing_lastname_and_id_handled(self):
+        # A person with no lastName maps to ""; an entry with no id is skipped.
+        session = make_session(
+            {
+                "/people": {
+                    "people": [
+                        {"id": 10, "lastName": "Butler"},
+                        {"id": 11},  # no lastName → ""
+                        {"lastName": "Ghost"},  # no id → excluded
+                    ]
+                }
+            }
+        )
+        widget = make_widget(session=session)
+        assert await widget._resolve_names({10, 11}) == {10: "Butler", 11: ""}
 
 
 class TestFallbackStates:
@@ -626,6 +667,53 @@ class TestUpdate:
         assert widget.feed_stories[0].text == "No Data"
         assert widget._last_derive is None
 
+    async def test_savant_http_error_sets_no_data_not_off_day(self):
+        # A Savant rate-limit / outage returns an HTTP error with a non-CSV
+        # body; raise_for_status() must route it to "No Data", not let it
+        # parse to zero rows and masquerade as an off-day ("No games soon").
+        patcher, today = _freeze_today()
+
+        def side_effect(url, *args, **kwargs):
+            if "statcast_search" in url:
+                resp = mock.AsyncMock()
+                resp.raise_for_status = mock.Mock(
+                    side_effect=RuntimeError("429 Too Many Requests")
+                )
+                ctx = mock.AsyncMock()
+                ctx.__aenter__.return_value = resp
+                return ctx
+            return _ctx(QUIET_SCHEDULE)
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session)
+        widget._tz = NY
+        with patcher:
+            await widget.update()
+        assert widget.feed_stories[0].text == "No Data"
+        assert widget._last_derive is None
+
+    async def test_gate_failure_then_success_stores_minus_one_sentinel(self):
+        # Gate fetch fails (counts=None) but a derive succeeds — _last_derive
+        # records final=-1 so the next tick can never gate-skip (fail open).
+        patcher, today = _freeze_today()
+
+        def side_effect(url, *args, **kwargs):
+            if "sportId=1&date=" in url:
+                raise RuntimeError("schedule down")
+            if "statcast_search" in url:
+                return _ctx(make_csv(hr(463, batter=11)))
+            return _ctx(PEOPLE)
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session, stats=["longest_hr"])
+        widget._tz = NY
+        with patcher:
+            await widget.update()
+        assert widget._last_derive == (today, -1)
+        assert line_text(widget.feed_stories[0]).startswith("Today · ")
+
     async def test_update_logs_info(self, caplog):
         patcher, today = _freeze_today()
         widget = self._widget(
@@ -647,3 +735,23 @@ class TestUpdate:
             if r.levelno == logging.INFO and "statcast" in r.message.lower()
         ]
         assert matching, f"expected INFO log; got {[r.message for r in caplog.records]}"
+
+
+class TestBgColor:
+    def test_field_exists(self):
+        from led_ticker_baseball.statcast import MLBStatcastMonitor
+
+        names = {a.name for a in MLBStatcastMonitor.__attrs_attrs__}
+        assert "bg_color" in names
+
+    def test_bg_color_propagates_to_title_and_stories(self):
+        from rgbmatrix.graphics import Color
+
+        bg = Color(11, 22, 33)
+        widget = make_widget(bg_color=bg, stats=["longest_hr"])
+        widget._set_title()
+        assert widget.feed_title.bg_color is bg
+        story = widget._build_stat_stories({"longest_hr": rec(463)}, "Today", {})[0]
+        assert story.bg_color is bg
+        widget._set_error_state()
+        assert widget.feed_stories[0].bg_color is bg
