@@ -29,7 +29,7 @@ from led_ticker.plugin import (
     make_color,
 )
 
-from led_ticker_baseball.teams import _team_color
+from led_ticker_baseball.teams import _MLB_LIVE_API, MLB_API, _team_color
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -302,4 +302,56 @@ class MLBAttendanceMonitor:
             bg_color=self.bg_color,
             font=self.font,
             font_color=self.font_color,
+        )
+
+    async def _fetch_schedule(
+        self, day: date
+    ) -> tuple[list[GameVenue] | None, tuple[int, int] | None]:
+        """Gated schedule fetch → (games, (live, final) counts). (None, None)
+        on failure (fail open)."""
+        url = (
+            f"{MLB_API}/schedule?sportId=1&date={day.isoformat()}"
+            f"&hydrate=venue(fieldInfo),team"
+        )
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Attendance schedule fetch failed")
+            return None, None
+        games = _parse_schedule_games(data)
+        live = sum(g.state == "Live" for g in games)
+        final = sum(g.state == "Final" for g in games)
+        return games, (live, final)
+
+    async def _fetch_attendance(self, game_pk: int) -> int | None:
+        """Boxscore attendance for one game; None on failure or absence."""
+        url = f"{MLB_API}/game/{game_pk}/boxscore"
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Attendance boxscore fetch failed for %s", game_pk)
+            return None
+        return _parse_attendance(data)
+
+    async def _fetch_game_data(
+        self, game_pk: int
+    ) -> tuple[int | None, dict[str, Any] | None, str, int]:
+        """Live feed → (attendance, weather, venue_name, capacity).
+
+        Raises on fetch failure — the caller owns the error state.
+        """
+        url = f"{_MLB_LIVE_API}/game/{game_pk}/feed/live"
+        async with self.session.get(url) as resp:
+            data = await resp.json()
+        gd = data.get("gameData", {})
+        att = gd.get("gameInfo", {}).get("attendance")
+        weather = gd.get("weather") or None
+        venue = gd.get("venue", {})
+        return (
+            att if isinstance(att, int) else None,
+            weather,
+            venue.get("name", ""),
+            venue.get("fieldInfo", {}).get("capacity", 0) or 0,
         )

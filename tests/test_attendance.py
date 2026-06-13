@@ -411,3 +411,103 @@ class TestBuildTeamLine:
             tor.green,
             tor.blue,
         )
+
+
+def _ctx(payload):
+    resp = mock.AsyncMock()
+    resp.raise_for_status = mock.Mock()
+    resp.json.return_value = payload
+    ctx = mock.AsyncMock()
+    ctx.__aenter__.return_value = resp
+    return ctx
+
+
+def make_session(routes):
+    session = mock.MagicMock()
+
+    def side_effect(url, *args, **kwargs):
+        for key, payload in routes.items():
+            if key in url:
+                return _ctx(payload)
+        return _ctx({})
+
+    session.get.side_effect = side_effect
+    return session
+
+
+def boxscore(att):
+    info = [{"label": "Att", "value": att}] if att is not None else []
+    return {"info": info}
+
+
+class TestFetchSchedule:
+    async def test_returns_games_and_counts(self):
+        session = make_session(
+            {
+                "hydrate=venue(fieldInfo),team": schedule(
+                    sched_game(1, "Live"),
+                    sched_game(2, "Final"),
+                    sched_game(3, "Preview"),
+                )
+            }
+        )
+        w = make_widget(session=session)
+        games, counts = await w._fetch_schedule(TODAY)
+        assert counts == (1, 1)  # (live, final)
+        assert len(games) == 3
+
+    async def test_failure_returns_none(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("down")
+        w = make_widget(session=session)
+        assert await w._fetch_schedule(TODAY) == (None, None)
+
+
+class TestFetchAttendance:
+    async def test_parses_boxscore(self):
+        session = make_session({"/boxscore": boxscore("19,587.")})
+        w = make_widget(session=session)
+        assert await w._fetch_attendance(823370) == 19587
+
+    async def test_missing_returns_none(self):
+        session = make_session({"/boxscore": boxscore(None)})
+        w = make_widget(session=session)
+        assert await w._fetch_attendance(823370) is None
+
+    async def test_failure_returns_none(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("down")
+        w = make_widget(session=session)
+        assert await w._fetch_attendance(1) is None
+
+
+class TestFetchGameData:
+    async def test_returns_attendance_weather_venue_capacity(self):
+        feed = {
+            "gameData": {
+                "gameInfo": {"attendance": 19587},
+                "weather": {"condition": "Clear", "temp": "72", "wind": "5 mph"},
+                "venue": {"name": "PNC Park", "fieldInfo": {"capacity": 38753}},
+            }
+        }
+        session = make_session({"/feed/live": feed})
+        w = make_widget(session=session)
+        att, weather, venue, cap = await w._fetch_game_data(823370)
+        assert att == 19587
+        assert weather["condition"] == "Clear"
+        assert venue == "PNC Park"
+        assert cap == 38753
+
+    async def test_pregame_attendance_none(self):
+        feed = {
+            "gameData": {
+                "gameInfo": {},
+                "weather": {"condition": "Clear", "temp": "72"},
+                "venue": {"name": "PNC Park", "fieldInfo": {}},
+            }
+        }
+        session = make_session({"/feed/live": feed})
+        w = make_widget(session=session)
+        att, weather, venue, cap = await w._fetch_game_data(823370)
+        assert att is None
+        assert cap == 0
