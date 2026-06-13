@@ -12,7 +12,7 @@ re-derives, schedule-gated so off-hours ticks are cheap.
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -355,3 +355,56 @@ class MLBAttendanceMonitor:
             venue.get("name", ""),
             venue.get("fieldInfo", {}).get("capacity", 0) or 0,
         )
+
+    # Contract: the _set_*_state setters manage feed_stories only. update()
+    # calls _set_title() first, so feed_title is always set, including on error.
+
+    def _set_error_state(self) -> None:
+        self.feed_stories = [
+            TickerMessage(
+                "No Data", font_color=self._body_color(), bg_color=self.bg_color
+            ),
+        ]
+        logger.info(
+            "MLB Attendance updated: %d stories (no data)", len(self.feed_stories)
+        )
+
+    async def _set_no_games_state(self, today: date) -> None:
+        """Off-day / offseason probe (30 days). Team mode names the next game
+        date; league mode names the next slate. Failed probe → 'No games soon'.
+        """
+        start = today.isoformat()
+        end = (today + timedelta(days=30)).isoformat()
+        team_q = f"&teamId={self._team_id}" if self.team else ""
+        url = (
+            f"{MLB_API}/schedule?sportId=1&startDate={start}&endDate={end}"
+            f"&gameType=R{team_q}"
+        )
+        data: dict[str, Any] = {}
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Attendance probe failed")
+        next_date: date | None = None
+        for date_entry in data.get("dates", []):
+            raw = date_entry.get("date")
+            if not raw:
+                continue
+            try:
+                next_date = date.fromisoformat(raw)
+                break
+            except ValueError:
+                continue
+        if next_date is None:
+            text = "No games soon"
+        elif self.team:
+            text = f"Next game: {next_date.strftime('%b %-d')}"
+        else:
+            text = f"Next games: {next_date.strftime('%b %-d')}"
+        self.feed_stories = [
+            TickerMessage(
+                text, font_color=self._body_color(), center=True, bg_color=self.bg_color
+            ),
+        ]
+        logger.info("MLB Attendance updated: fallback (%s)", text)

@@ -511,3 +511,40 @@ class TestFetchGameData:
         att, weather, venue, cap = await w._fetch_game_data(823370)
         assert att is None
         assert cap == 0
+
+
+class TestFallbackStates:
+    def test_error_state(self):
+        w = make_widget()
+        w._set_error_state()
+        assert w.feed_stories[0].text == "No Data"
+
+    async def test_probe_finds_next_game_team_mode(self):
+        # Team mode → "Next game: <date>".
+        session = make_session({"startDate": {"dates": [{"date": "2027-03-26"}]}})
+        w = make_widget(session=session, team="TOR")
+        w._team_id = 141
+        await w._set_no_games_state(TODAY)
+        assert w.feed_stories[0].text == "Next game: Mar 26"
+
+    async def test_probe_empty_says_no_games_soon(self):
+        session = make_session({"startDate": {"dates": []}})
+        w = make_widget(session=session, team="TOR")
+        w._team_id = 141
+        await w._set_no_games_state(TODAY)
+        assert w.feed_stories[0].text == "No games soon"
+
+    async def test_probe_league_mode_next_games(self):
+        # League mode (no team) names the next slate: "Next games: <date>".
+        session = make_session({"startDate": {"dates": [{"date": "2027-03-26"}]}})
+        w = make_widget(session=session)
+        await w._set_no_games_state(TODAY)
+        assert w.feed_stories[0].text == "Next games: Mar 26"
+
+    async def test_probe_failure_degrades(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("down")
+        w = make_widget(session=session, team="TOR")
+        w._team_id = 141
+        await w._set_no_games_state(TODAY)
+        assert w.feed_stories[0].text == "No games soon"
