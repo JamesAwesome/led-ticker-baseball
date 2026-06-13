@@ -19,16 +19,19 @@ chosen by whether `team` is configured:
 
 All from the StatsAPI the plugin already uses; no new dependency.
 
-**Schedule** (the shared gate), one call per refresh, ~20 KB:
+**Schedule** (the shared gate), one call per refresh, ~47 KB:
 
 ```
-GET {MLB_API}/schedule?sportId=1&date={YYYY-MM-DD}&hydrate=venue(fieldInfo)
+GET {MLB_API}/schedule?sportId=1&date={YYYY-MM-DD}&hydrate=venue(fieldInfo),team
 ```
 
 Per game it yields: `status.abstractGameState` (Preview/Live/Final),
-`gamePk`, `teams.home/away`, `venue.name`, and
-`venue.fieldInfo.capacity`. **Attendance is NOT in the schedule at any
-hydration** — it lives per-game only.
+`gamePk`, `gameNumber` (1/2 for doubleheaders), `venue.name`,
+`venue.fieldInfo.capacity`, and — because of the `,team` hydration —
+`teams.home/away.team.abbreviation` (verified: `venue(fieldInfo)` alone
+returns only `{id, name, link}`, no abbreviation; adding `,team` brings it in
+and roughly doubles the payload, ~23 KB → ~47 KB). **Attendance is NOT in the
+schedule at any hydration** — it lives per-game only.
 
 **Live game feed** (team mode), one fetch for the tracked team's game:
 
@@ -37,9 +40,16 @@ GET {_MLB_LIVE_API}/game/{gamePk}/feed/live
 ```
 
 `gameData.gameInfo.attendance` (int, present only once Final),
-`gameData.weather` = `{condition, temp, wind}` (a forecast pre-game, e.g.
-`{"condition": "Partly Cloudy", "temp": "86", "wind": "8 mph, Out To CF"}`),
-plus `gameData.venue`. One fetch carries everything team mode needs.
+`gameData.weather` = `{condition, temp, wind}`, plus `gameData.venue`. One
+fetch carries everything team mode needs.
+
+Weather availability (verified): populated for **same-day** games at every
+state — including a Preview before first pitch, the day-of forecast (e.g.
+`{"condition": "Clear", "temp": "97", "wind": "7 mph, Out To LF"}`) — and for
+Live/Final. It is empty (`{}`) only for **future-day** Previews (a game days
+away). This widget only ever renders today's or yesterday's game, so weather
+is normally present; the "omit the weather segment when absent" rule below
+covers the rare early-morning-before-forecast case.
 
 **Boxscore** (league mode), one per Final game, ~165 KB (≈10× lighter than
 the live feed):
@@ -56,8 +66,9 @@ Field availability by game state (verified): attendance exists only at
 attendance is the post-game headline and venue/weather is the always-available
 fallback.
 
-Rejected: full live feeds for league mode (1–5 MB × ~15 games = 30–75 MB per
-refresh vs ~2.5 MB of boxscores); schedule-only (no attendance anywhere in it).
+Rejected: full live feeds for league mode (~789 KB × ~15 games ≈ 11.8 MB per
+refresh vs ~2.5 MB of boxscores at ~165 KB each — the boxscore is ~4.8× lighter
+than the feed); schedule-only (no attendance anywhere in it).
 
 ## User-facing surface
 
@@ -119,14 +130,28 @@ its brand color (self-identifying — the tracked team even on a road game; the
 venue says where):
 
 ```
-final:    TOR · Rogers Centre 41,212 (89%) · 72° Clear, wind 5 mph In From CF
-pre/live: TOR · Rogers Centre · 72° Clear, wind 5 mph In From CF
+final:   TOR · Rogers Centre 41,212 (89%) · 72° Clear, wind 5 mph In From CF
+live:    TOR · Rogers Centre · 72° Clear, wind 5 mph In From CF
+preview: TOR · Rogers Centre · 72° Clear, wind 5 mph In From CF
 ```
 
 Segments: `TOR ` (team color) · venue name (body) · attendance + ` (NN%)`
 (amber; omitted until Final, and the `%` omitted when capacity missing/0) ·
 weather `<temp>° <condition>, wind <wind>` (body). `temp` is Fahrenheit as a
-bare string from the feed → `72°`. Weather is always shown (forecast pre-game).
+bare string from the feed → `72°`. Weather is shown whenever present (it is,
+for the same-day game this widget renders); the segment is omitted if the feed
+returns empty weather.
+
+**Doubleheader rule:** if the tracked team has two games on the date, pick the
+Live one if either is in progress; else the later game (`gameNumber == 2`) when
+both are Final; else the earlier (`gameNumber == 1`). One line, one game.
+
+**Yesterday fallback line** prepends the short date as its own grey segment,
+after the team prefix:
+
+```
+6/12 · TOR · Rogers Centre 41,212 (89%) · 72° Clear, wind 5 mph In From CF
+```
 
 ### Day selection & fallbacks
 
@@ -162,7 +187,10 @@ only; `MLB_API`/`_MLB_LIVE_API`/`_team_color`/`resolve_team_id` from
 open), no prior successful derive, the local date rolled over, any game is
 Live, or the Final count changed; else keep current stories. Snapshot is
 `(date, final_count)`, reset to None on error/fallback so the next tick
-re-derives. Identical discipline to statcast.
+re-derives. Identical discipline to statcast. The gate uses the **league-wide**
+Final count even in team mode — slightly coarse (another team finalizing
+forces a re-derive of an unchanged team line) but cheap and simpler than a
+team-specific gate; the re-derive just rebuilds the same line.
 
 ### update() flow
 
@@ -170,12 +198,21 @@ re-derives. Identical discipline to statcast.
 2. `_fetch_schedule(today)`; `_should_skip` → return.
 3. Branch on `self.team`:
    - **Team:** resolve id (cached after first run), find the team's game in the
-     schedule; fetch its live feed; build the team line. Empty → yesterday →
-     probe per the table.
-   - **League:** filter Final games with capacity; `asyncio.gather` boxscore
-     fetches; parse attendance; derive the requested superlatives; build lines.
-     Empty → yesterday → probe.
+     gated schedule (doubleheader rule above). If found → fetch its live feed →
+     build the team line (no date prefix). If no game today → `_fetch_schedule(
+     yesterday)`, find the team's game, fetch its feed, build the line with the
+     short-date prefix. If still none → 30-day team probe
+     (`teamId=…&gameType=R`) → `Next game: <date>`, else `No games soon`.
+   - **League:** from the gated schedule take Final games with capacity > 0;
+     `asyncio.gather` boxscore fetches (per-game failures skipped); parse
+     attendance; derive the requested superlatives; build `Today · …` lines. If
+     none → repeat against `_fetch_schedule(yesterday)` with short-date labels.
+     If still none → 30-day league probe → `No games soon`.
 4. On success, store the schedule snapshot; INFO log the rebuild.
+
+Team mode reuses the full league-wide gated schedule to locate the team's game
+(one ~47 KB call) rather than a separate `teamId=`-scoped schedule — a
+deliberate trade-off that keeps one gate call shared across both modes.
 
 ### Parsing
 
@@ -216,6 +253,8 @@ Classmethod, returns `list[str]`, never raises (sibling contract):
 - **CLAUDE.md:** overview bullet, `attendance.py` file-map line, `register()`
   snippet line, `test_attendance.py` in the tests list; bump the "all four
   widget modules import teams.py" count to five.
+- **`__init__.py`:** add the import + `api.widget("attendance")(...)` line and
+  extend the module docstring's widget list (`baseball.attendance`).
 
 ## Testing
 
@@ -238,7 +277,9 @@ substring (same harness as the sibling tests):
   Data`.
 - **validate_config:** non-string team; unknown/`non-list stats`; stats+team
   warning.
-- **start():** patched `spawn_tracked`/`run_monitor_loop` (sync mocks), asserts
-  tz/id resolved, update ran, loop spawned — per the convention set in #11.
+- **start():** patched `spawn_tracked`/`run_monitor_loop` (sync mocks), loop
+  spawned with the configured interval, update ran — per the convention set in
+  #11. Two cases: team mode (asserts `_tz` and `_team_id` resolved) and league
+  mode (asserts `_tz` resolved, no team resolution).
 - **Smoke/import purity:** `test_smoke.py` asserts `baseball.attendance`
   registers; AST tripwire auto-covers the module.
