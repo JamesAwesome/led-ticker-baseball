@@ -11,8 +11,8 @@ import csv
 import io
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta
+from typing import Any, Self
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -26,6 +26,8 @@ from led_ticker.plugin import (
     TickerMessage,
     colors,
     make_color,
+    run_monitor_loop,
+    spawn_tracked,
 )
 
 from led_ticker_baseball.teams import MLB_API, _team_color
@@ -39,6 +41,8 @@ SAVANT_CSV_URL: str = (
 _USER_AGENT: str = (
     "led-ticker-baseball (+https://github.com/JamesAwesome/led-ticker-baseball)"
 )
+
+_INTERVAL_THIRTY_MIN: int = 1800
 
 _STAT_KEYS: tuple[str, ...] = (
     "longest_hr",
@@ -182,6 +186,56 @@ class MLBStatcastMonitor:
     feed_stories: list[TickerMessage | SegmentMessage] = attrs.field(
         init=False, factory=list
     )
+
+    @classmethod
+    async def start(
+        cls,
+        session: aiohttp.ClientSession,
+        update_interval: int = _INTERVAL_THIRTY_MIN,
+        **kwargs: Any,
+    ) -> Self:
+        logger.debug("MLBStatcastMonitor.start")
+        widget = cls(session=session, **kwargs)
+        widget._tz = ZoneInfo(widget.timezone)
+        await widget.update()
+        logger.info("MLB Statcast: %d stories", len(widget.feed_stories))
+        spawn_tracked(run_monitor_loop(widget, update_interval))
+        return widget
+
+    async def update(self) -> None:
+        """Re-derive the day's superlatives (schedule-gated)."""
+        tz = self._tz or ZoneInfo(self.timezone)
+        today = datetime.now(tz).date()
+        self._set_title()
+
+        counts = await self._fetch_schedule_counts(today)
+        if self._should_skip(today, counts):
+            logger.debug("MLB Statcast: gate skip (no new game activity)")
+            return
+
+        try:
+            records = await self._derive_day(today)
+            label = "Today"
+            if not records:
+                records = await self._derive_day(today - timedelta(days=1))
+                label = "Yest"
+        except Exception:
+            logger.exception("MLB Statcast fetch/derive error")
+            self._last_derive = None
+            self._set_error_state()
+            return
+
+        if not records:
+            self._last_derive = None
+            await self._set_no_games_state(today)
+            return
+
+        names = await self._resolve_names({r.person_id for r in records.values()})
+        self.feed_stories = self._build_stat_stories(records, label, names)
+        self._last_derive = (today, counts[1] if counts is not None else -1)
+        logger.info(
+            "MLB Statcast updated: %d stories (%s)", len(self.feed_stories), label
+        )
 
     def _body_color(self) -> Color | ColorProvider:
         return self.font_color if self.font_color is not None else colors.RGB_WHITE

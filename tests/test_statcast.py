@@ -1,6 +1,7 @@
 """Tests for the MLB league-wide Statcast superlatives widget."""
 
 import datetime as dt
+import logging
 import unittest.mock as mock
 from zoneinfo import ZoneInfo
 
@@ -57,6 +58,7 @@ class TestRowHelpers:
 
         assert _to_id({"batter": "660271"}, "batter") == 660271
         assert _to_id({"batter": ""}, "batter") == 0
+        assert _to_id({"batter": "abc"}, "batter") == 0
         assert _to_id({}, "batter") == 0
 
     def test_row_team_batter_top_is_away(self):
@@ -461,6 +463,23 @@ class TestFallbackStates:
         await widget._set_no_games_state(TODAY)
         assert widget.feed_stories[0].text == "Next games: Mar 26"
 
+    async def test_no_games_probe_skips_malformed_dates(self):
+        # First entry has no usable date, second is unparseable, third is good.
+        session = make_session(
+            {
+                "startDate": {
+                    "dates": [
+                        {"date": ""},
+                        {"date": "not-a-date"},
+                        {"date": "2027-03-28"},
+                    ]
+                }
+            }
+        )
+        widget = make_widget(session=session)
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "Next games: Mar 28"
+
     async def test_no_games_probe_empty(self):
         session = make_session({"startDate": {"dates": []}})
         widget = make_widget(session=session)
@@ -473,3 +492,131 @@ class TestFallbackStates:
         widget = make_widget(session=session)
         await widget._set_no_games_state(TODAY)
         assert widget.feed_stories[0].text == "No games soon"
+
+
+def _freeze_today():
+    """(patcher, today) freezing statcast.datetime.now at the current time.
+
+    The frozen mock wraps the real datetime so classmethods (fromisoformat)
+    still work.
+    """
+    now = dt.datetime.now(NY)
+    frozen = mock.Mock(wraps=dt.datetime)
+    frozen.now.return_value = now
+    patcher = mock.patch("led_ticker_baseball.statcast.datetime", frozen)
+    return patcher, now.date()
+
+
+PEOPLE = {"people": [{"id": 11, "lastName": "Butler"}]}
+QUIET_SCHEDULE = {"dates": [{"games": [sched_game("Final")] * 3}]}
+
+
+class TestUpdate:
+    def _widget(self, routes, **kwargs):
+        widget = make_widget(session=make_session(routes), **kwargs)
+        widget._tz = NY
+        return widget
+
+    async def test_today_records_build_stories(self):
+        patcher, today = _freeze_today()
+        widget = self._widget(
+            {
+                "sportId=1&date=": QUIET_SCHEDULE,
+                f"game_date_gt={today.isoformat()}": make_csv(hr(463, batter=11)),
+                "/people": PEOPLE,
+            },
+            stats=["longest_hr"],
+        )
+        with patcher:
+            await widget.update()
+        assert line_text(widget.feed_stories[0]) == (
+            "Today · Longest HR 463 ft — Butler TOR"
+        )
+        assert widget.feed_title is not None
+        assert widget._last_derive == (today, 3)
+
+    async def test_empty_today_falls_back_to_yesterday(self):
+        patcher, today = _freeze_today()
+        yest = today - dt.timedelta(days=1)
+        widget = self._widget(
+            {
+                "sportId=1&date=": QUIET_SCHEDULE,
+                f"game_date_gt={today.isoformat()}": make_csv(),
+                f"game_date_gt={yest.isoformat()}": make_csv(hr(463, batter=11)),
+                "/people": PEOPLE,
+            },
+            stats=["longest_hr"],
+        )
+        with patcher:
+            await widget.update()
+        assert line_text(widget.feed_stories[0]).startswith("Yest · ")
+
+    async def test_both_days_empty_routes_to_no_games(self):
+        patcher, today = _freeze_today()
+        widget = self._widget(
+            {
+                "sportId=1&date=": {"dates": []},
+                "statcast_search": make_csv(),
+                "startDate": {"dates": []},
+            }
+        )
+        with patcher:
+            await widget.update()
+        assert widget.feed_stories[0].text == "No games soon"
+        assert widget._last_derive is None
+
+    async def test_gate_skip_keeps_stories_and_skips_savant(self):
+        patcher, today = _freeze_today()
+        widget = self._widget({"sportId=1&date=": QUIET_SCHEDULE})
+        widget._last_derive = (today, 3)
+        sentinel = ["sentinel"]
+        widget.feed_stories = sentinel
+        with patcher:
+            await widget.update()
+        assert widget.feed_stories is sentinel
+        savant_calls = [
+            c
+            for c in widget.session.get.call_args_list
+            if "statcast_search" in c.args[0]
+        ]
+        assert savant_calls == []
+
+    async def test_fetch_error_sets_no_data_and_clears_snapshot(self):
+        patcher, today = _freeze_today()
+
+        def side_effect(url, *args, **kwargs):
+            if "statcast_search" in url:
+                raise RuntimeError("savant down")
+            return _ctx(QUIET_SCHEDULE)
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session)
+        widget._tz = NY
+        widget._last_derive = (today - dt.timedelta(days=1), 1)
+        with patcher:
+            await widget.update()
+        assert widget.feed_stories[0].text == "No Data"
+        assert widget._last_derive is None
+
+    async def test_update_logs_info(self, caplog):
+        patcher, today = _freeze_today()
+        widget = self._widget(
+            {
+                "sportId=1&date=": QUIET_SCHEDULE,
+                f"game_date_gt={today.isoformat()}": make_csv(hr(463, batter=11)),
+                "/people": PEOPLE,
+            },
+            stats=["longest_hr"],
+        )
+        with (
+            patcher,
+            caplog.at_level(logging.INFO, logger="led_ticker_baseball.statcast"),
+        ):
+            await widget.update()
+        matching = [
+            r
+            for r in caplog.records
+            if r.levelno == logging.INFO and "statcast" in r.message.lower()
+        ]
+        assert matching, f"expected INFO log; got {[r.message for r in caplog.records]}"
