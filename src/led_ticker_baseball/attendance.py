@@ -12,7 +12,21 @@ re-derives, schedule-gated so off-hours ticks are cheap.
 import logging
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
+from zoneinfo import ZoneInfo
+
+import aiohttp
+import attrs
+from led_ticker.plugin import (
+    FONT_DEFAULT,
+    Color,
+    ColorProvider,
+    Font,
+    SegmentMessage,
+    TickerMessage,
+    colors,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -143,3 +157,61 @@ def _derive_superlatives(
             if "emptiest" in stats:
                 consider("emptiest", pct, gv, lower=True)
     return records
+
+
+@attrs.define
+class MLBAttendanceMonitor:
+    """Ballpark attendance — league superlatives, or one team's game."""
+
+    session: aiohttp.ClientSession
+    team: str = ""  # "" → league mode; else team mode
+    stats: list[str] = attrs.field(factory=lambda: list(_STAT_KEYS))
+    title: str = "Attendance"
+    timezone: str = "America/New_York"
+    padding: int = 6
+    hold_time: float = 0.0
+    bg_color: Color | None = attrs.field(default=None, kw_only=True)
+    font_color: Color | ColorProvider | None = attrs.field(default=None, kw_only=True)
+    font: Font = attrs.field(default=FONT_DEFAULT, kw_only=True)
+    _tz: ZoneInfo | None = attrs.field(init=False, default=None)
+    _team_id: int = attrs.field(init=False, default=0)
+    # (local date, Final count) at the last successful derive; None until the
+    # first success (and after any error/fallback).
+    _last_derive: tuple[date, int] | None = attrs.field(init=False, default=None)
+    feed_title: TickerMessage | SegmentMessage | None = attrs.field(
+        init=False, default=None
+    )
+    feed_stories: list[TickerMessage | SegmentMessage] = attrs.field(
+        init=False, factory=list
+    )
+
+    def _body_color(self) -> Color | ColorProvider:
+        return self.font_color if self.font_color is not None else colors.RGB_WHITE
+
+    def _plain_body_color(self) -> Color | ColorProvider:
+        """Body-text color for per-segment use; a plain Color tints body text
+        while callout segments keep their colors, a provider passes through and
+        overrides every segment in core (same as the sibling widgets)."""
+        if self.font_color is not None and not hasattr(self.font_color, "color_for"):
+            return self.font_color
+        return colors.RGB_WHITE
+
+    def _set_title(self) -> None:
+        self.feed_title = TickerMessage(
+            self.title,
+            font_color=self._body_color(),
+            center=True,
+            bg_color=self.bg_color,
+        )
+
+    def _should_skip(self, today: date, counts: tuple[int, int] | None) -> bool:
+        """Skip refetch when nothing changed since the last successful derive.
+
+        Re-derive when the gate fetch failed, no prior derive, the date rolled,
+        any game is live, or the Final count moved.
+        """
+        if counts is None or self._last_derive is None:
+            return False
+        snap_day, snap_final = self._last_derive
+        live, final = counts
+        return snap_day == today and live == 0 and final == snap_final

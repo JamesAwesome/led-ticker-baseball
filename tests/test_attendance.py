@@ -1,5 +1,12 @@
 """Tests for the MLB attendance widget (league superlatives + team mode)."""
 
+import datetime as dt
+import unittest.mock as mock
+from zoneinfo import ZoneInfo
+
+NY = ZoneInfo("America/New_York")
+TODAY = dt.date(2026, 6, 13)
+
 
 class TestParseAttendance:
     def test_parses_att_with_commas_and_period(self):
@@ -187,3 +194,78 @@ class TestDeriveSuperlatives:
 
     def test_empty_pairs(self):
         assert self._derive([]) == {}
+
+
+def make_widget(**kwargs):
+    from led_ticker_baseball.attendance import MLBAttendanceMonitor
+
+    widget = MLBAttendanceMonitor(session=kwargs.pop("session", mock.Mock()), **kwargs)
+    widget._tz = NY
+    return widget
+
+
+class TestSkeleton:
+    def test_default_is_league_mode_all_stats(self):
+        from led_ticker_baseball.attendance import _STAT_KEYS
+
+        w = make_widget()
+        assert w.team == ""
+        assert w.stats == list(_STAT_KEYS)
+
+    def test_team_mode_when_team_set(self):
+        assert make_widget(team="tor").team == "tor"  # not upper-cased until start()
+
+    def test_default_title(self):
+        w = make_widget()
+        w._set_title()
+        assert w.feed_title.text == "Attendance"
+
+    def test_title_override(self):
+        w = make_widget(title="Turnstiles")
+        w._set_title()
+        assert w.feed_title.text == "Turnstiles"
+
+    def test_font_color_selected_for_body(self):
+        from led_ticker.plugin import make_color
+
+        c = make_color(255, 0, 0)
+        w = make_widget(font_color=c)
+        assert w._body_color() is c
+        assert w._plain_body_color() is c
+
+    def test_default_body_color_is_white(self):
+        from led_ticker.colors import RGB_WHITE
+
+        w = make_widget()
+        assert w._body_color() is RGB_WHITE
+        assert w._plain_body_color() is RGB_WHITE
+
+
+class TestShouldSkip:
+    def test_no_prior_derive_never_skips(self):
+        assert make_widget()._should_skip(TODAY, (0, 5)) is False
+
+    def test_gate_failure_fails_open(self):
+        w = make_widget()
+        w._last_derive = (TODAY, 5)
+        assert w._should_skip(TODAY, None) is False
+
+    def test_skips_when_unchanged(self):
+        w = make_widget()
+        w._last_derive = (TODAY, 5)
+        assert w._should_skip(TODAY, (0, 5)) is True
+
+    def test_live_forces_derive(self):
+        w = make_widget()
+        w._last_derive = (TODAY, 5)
+        assert w._should_skip(TODAY, (1, 5)) is False
+
+    def test_new_final_forces_derive(self):
+        w = make_widget()
+        w._last_derive = (TODAY, 5)
+        assert w._should_skip(TODAY, (0, 6)) is False
+
+    def test_date_rollover_forces_derive(self):
+        w = make_widget()
+        w._last_derive = (TODAY - dt.timedelta(days=1), 5)
+        assert w._should_skip(TODAY, (0, 5)) is False
