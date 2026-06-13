@@ -11,6 +11,7 @@ re-derives, schedule-gated so off-hours ticks are cheap.
 
 import logging
 import re
+from dataclasses import dataclass
 from typing import Any
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -52,3 +53,37 @@ def _format_weather(weather: dict[str, Any] | None) -> str | None:
     if not head:
         return None
     return f"{head}, wind {wind}" if wind else head
+
+
+@dataclass(frozen=True)
+class GameVenue:
+    game_pk: int
+    state: str  # abstractGameState: Preview / Live / Final
+    game_number: int
+    home_abbr: str
+    away_abbr: str
+    venue: str
+    capacity: int  # 0 when the venue has no listed capacity
+
+
+def _parse_schedule_games(data: dict[str, Any]) -> list[GameVenue]:
+    """Flatten a hydrate=venue(fieldInfo),team schedule into GameVenue rows."""
+    games: list[GameVenue] = []
+    for date_entry in data.get("dates", []):
+        for g in date_entry.get("games", []):
+            teams = g.get("teams", {})
+            home = teams.get("home", {}).get("team", {})
+            away = teams.get("away", {}).get("team", {})
+            venue = g.get("venue", {})
+            games.append(
+                GameVenue(
+                    game_pk=g.get("gamePk", 0),
+                    state=g.get("status", {}).get("abstractGameState", "Preview"),
+                    game_number=g.get("gameNumber", 1),
+                    home_abbr=home.get("abbreviation", ""),
+                    away_abbr=away.get("abbreviation", ""),
+                    venue=venue.get("name", ""),
+                    capacity=venue.get("fieldInfo", {}).get("capacity", 0) or 0,
+                )
+            )
+    return games
