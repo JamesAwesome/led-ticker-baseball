@@ -23,7 +23,10 @@ from led_ticker.plugin import (
     SegmentMessage,
     TickerMessage,
     colors,
+    make_color,
 )
+
+from led_ticker_baseball.teams import _team_color
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -40,6 +43,12 @@ _STAT_LABELS: dict[str, str] = {
     "fastest_pitch": "Fastest pitch",
     "slowest_pitch": "Slowest pitch",
 }
+
+# Baseball Savant uses a few team codes that differ from the StatsAPI
+# abbreviations the rest of the plugin (scores/standings/teams.py) speaks.
+# Normalize them so the displayed abbr and team color match the other
+# widgets — ATH→OAK (Athletics), AZ→ARI (D-backs).
+_SAVANT_ABBR: dict[str, str] = {"ATH": "OAK", "AZ": "ARI"}
 
 
 def _to_float(row: dict[str, Any], key: str) -> float | None:
@@ -76,7 +85,8 @@ def _row_team(row: dict[str, Any], who: str) -> str:
         team = row.get("away_team") if batting_away else row.get("home_team")
     else:
         team = row.get("home_team") if batting_away else row.get("away_team")
-    return team or ""
+    team = team or ""
+    return _SAVANT_ABBR.get(team, team)
 
 
 def _format_value(key: str, value: float) -> str:
@@ -121,7 +131,7 @@ def _derive_records(
             value=value,
             person_id=_to_id(r, who),
             team_abbr=_row_team(r, who),
-            pitch_name=r.get("pitch_name") or "",
+            pitch_name=(r.get("pitch_name") or "").strip(),
         )
 
     for r in rows:
@@ -200,3 +210,46 @@ class MLBStatcastMonitor:
         snap_day, snap_final = self._last_derive
         live, final = counts
         return snap_day == today and live == 0 and final == snap_final
+
+    def _build_stat_stories(
+        self,
+        records: dict[str, StatRecord],
+        day_label: str,
+        names: dict[int, str],
+    ) -> list[TickerMessage | SegmentMessage]:
+        """One centered line per stat: 'Today · Longest HR 463 ft — Butler ATH'.
+
+        Lines are self-contained (day label, stat, value, record holder, team
+        abbr in brand color) — stories scroll independently of the title.
+        ``self.stats`` order is display order; stats with no record are
+        omitted; an unresolved name degrades to value + team abbr.
+        """
+        grey = make_color(150, 150, 150)  # grey — day label
+        amber = make_color(255, 200, 60)  # amber — the record value
+        body_c = self._plain_body_color()
+
+        stories: list[TickerMessage | SegmentMessage] = []
+        for key in self.stats:
+            record = records.get(key)
+            if record is None:
+                continue
+            segments: list[tuple[str, Color | ColorProvider]] = [
+                (f"{day_label} · ", grey),
+                (f"{_STAT_LABELS[key]} ", body_c),
+                (_format_value(key, record.value), amber),
+            ]
+            if key == "slowest_pitch" and record.pitch_name:
+                segments.append((f" ({record.pitch_name})", body_c))
+            name = names.get(record.person_id, "")
+            segments.append((f" — {name} " if name else " — ", body_c))
+            segments.append((record.team_abbr, _team_color(record.team_abbr)))
+            stories.append(
+                SegmentMessage(
+                    segments,
+                    center=True,
+                    bg_color=self.bg_color,
+                    font=self.font,
+                    font_color=self.font_color,
+                )
+            )
+        return stories

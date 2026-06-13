@@ -73,6 +73,14 @@ class TestRowHelpers:
         assert _row_team(r, "batter") == "PHI"
         assert _row_team(r, "pitcher") == "TOR"
 
+    def test_row_team_normalizes_savant_abbrs(self):
+        from led_ticker_baseball.statcast import _row_team
+
+        # Savant uses ATH/AZ; the rest of the plugin speaks OAK/ARI.
+        r = row(inning_topbot="Top", away_team="ATH", home_team="AZ")
+        assert _row_team(r, "batter") == "OAK"
+        assert _row_team(r, "pitcher") == "ARI"
+
     def test_format_value(self):
         from led_ticker_baseball.statcast import _format_value
 
@@ -110,6 +118,12 @@ class TestDeriveRecords:
         assert (fast.person_id, fast.team_abbr) == (30, "PHI")
         assert slow.value == 69.6
         assert slow.pitch_name == "Slow Curve"
+
+    def test_pitch_name_is_stripped(self):
+        records = self._derive(
+            [row(release_speed=69.6, pitcher=31, pitch_name=" Slow Curve ")]
+        )
+        assert records["slowest_pitch"].pitch_name == "Slow Curve"
 
     def test_tie_keeps_first_row(self):
         records = self._derive([hr(440, batter=10), hr(440, batter=11)])
@@ -198,3 +212,96 @@ class TestShouldSkip:
         widget = make_widget()
         widget._last_derive = (TODAY - dt.timedelta(days=1), 15)
         assert widget._should_skip(TODAY, (0, 15)) is False
+
+
+def rec(value, person_id=10, team="TOR", pitch_name=""):
+    from led_ticker_baseball.statcast import StatRecord
+
+    return StatRecord(
+        value=value, person_id=person_id, team_abbr=team, pitch_name=pitch_name
+    )
+
+
+def line_text(story):
+    """Full visible text of a segment story line."""
+    return "".join(seg[0] for seg in story.segments)
+
+
+class TestBuildStatStories:
+    def test_line_format_and_order(self):
+        widget = make_widget()
+        records = {
+            "longest_hr": rec(463, person_id=10),
+            "fastest_pitch": rec(101.8, person_id=30, team="MIL"),
+        }
+        stories = widget._build_stat_stories(
+            records, "Today", {10: "Butler", 30: "Misiorowski"}
+        )
+        assert line_text(stories[0]) == "Today · Longest HR 463 ft — Butler TOR"
+        assert (
+            line_text(stories[1]) == "Today · Fastest pitch 101.8 mph — Misiorowski MIL"
+        )
+
+    def test_stats_config_order_controls_display_order(self):
+        widget = make_widget(stats=["fastest_pitch", "longest_hr"])
+        records = {"longest_hr": rec(463), "fastest_pitch": rec(101.8)}
+        stories = widget._build_stat_stories(records, "Today", {})
+        assert "Fastest pitch" in line_text(stories[0])
+        assert "Longest HR" in line_text(stories[1])
+
+    def test_missing_stat_omits_line(self):
+        widget = make_widget()
+        stories = widget._build_stat_stories({"longest_hr": rec(463)}, "Today", {})
+        assert len(stories) == 1
+
+    def test_slowest_pitch_appends_pitch_name(self):
+        widget = make_widget(stats=["slowest_pitch"])
+        records = {
+            "slowest_pitch": rec(69.6, person_id=31, team="KC", pitch_name="Slow Curve")
+        }
+        stories = widget._build_stat_stories(records, "Today", {31: "Pederson"})
+        assert line_text(stories[0]) == (
+            "Today · Slowest pitch 69.6 mph (Slow Curve) — Pederson KC"
+        )
+
+    def test_fastest_pitch_never_appends_pitch_name(self):
+        widget = make_widget(stats=["fastest_pitch"])
+        records = {"fastest_pitch": rec(101.8, pitch_name="4-Seam Fastball")}
+        stories = widget._build_stat_stories(records, "Today", {})
+        assert "4-Seam" not in line_text(stories[0])
+
+    def test_unresolved_name_drops_name_keeps_team(self):
+        widget = make_widget(stats=["longest_hr"])
+        stories = widget._build_stat_stories({"longest_hr": rec(463)}, "Yest", {})
+        assert line_text(stories[0]) == "Yest · Longest HR 463 ft — TOR"
+
+    def test_colors_day_grey_value_amber_team_branded(self):
+        from led_ticker.colors import RGB_WHITE
+
+        widget = make_widget(stats=["longest_hr"])
+        stories = widget._build_stat_stories(
+            {"longest_hr": rec(463)}, "Today", {10: "Butler"}
+        )
+        segs = stories[0].segments
+        day_c, value_c, team_c = segs[0][1], segs[2][1], segs[-1][1]
+        assert (day_c.red, day_c.green, day_c.blue) == (150, 150, 150)
+        assert (value_c.red, value_c.green, value_c.blue) == (255, 200, 60)
+        assert team_c is not RGB_WHITE  # TOR brand color
+
+    def test_plain_font_color_tints_body_not_callouts(self):
+        from led_ticker.plugin import make_color
+
+        c = make_color(0, 255, 0)
+        widget = make_widget(stats=["longest_hr"], font_color=c)
+        stories = widget._build_stat_stories(
+            {"longest_hr": rec(463)}, "Today", {10: "Butler"}
+        )
+        segs = stories[0].segments
+        assert segs[1][1] is c  # "Longest HR " label
+        assert segs[3][1] is c  # " — Butler "
+        assert (segs[2][1].red, segs[2][1].green, segs[2][1].blue) == (255, 200, 60)
+
+    def test_stories_centered(self):
+        widget = make_widget(stats=["longest_hr"])
+        stories = widget._build_stat_stories({"longest_hr": rec(463)}, "Today", {})
+        assert stories[0].center is True
