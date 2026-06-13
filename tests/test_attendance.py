@@ -329,3 +329,85 @@ class TestBuildLeagueStories:
         w = make_widget(stats=["biggest_crowd"])
         stories = w._build_league_stories({"biggest_crowd": crowd_rec(45123)}, "Today")
         assert stories[0].center is True
+
+
+class TestBuildTeamLine:
+    def _w(self):
+        w = make_widget(team="TOR")
+        return w
+
+    def test_final_line_has_attendance_pct_and_weather(self):
+        w = self._w()
+        story = w._build_team_line(
+            venue="Rogers Centre",
+            attendance=41212,
+            capacity=46000,
+            weather={"condition": "Clear", "temp": "72", "wind": "5 mph, In From CF"},
+            day_label="",
+        )
+        assert line_text(story) == (
+            "TOR · Rogers Centre 41,212 (90%) · 72° Clear, wind 5 mph, In From CF"
+        )
+
+    def test_pregame_line_omits_attendance(self):
+        w = self._w()
+        story = w._build_team_line(
+            venue="Rogers Centre",
+            attendance=None,
+            capacity=46000,
+            weather={"condition": "Clear", "temp": "72"},
+            day_label="",
+        )
+        assert line_text(story) == "TOR · Rogers Centre · 72° Clear"
+
+    def test_capacity_missing_drops_pct(self):
+        w = self._w()
+        story = w._build_team_line(
+            venue="Sutter Health Park",
+            attendance=9000,
+            capacity=0,
+            weather=None,
+            day_label="",
+        )
+        assert line_text(story) == "TOR · Sutter Health Park 9,000"
+
+    def test_missing_weather_omitted(self):
+        w = self._w()
+        story = w._build_team_line(
+            venue="Rogers Centre",
+            attendance=None,
+            capacity=46000,
+            weather=None,
+            day_label="",
+        )
+        assert line_text(story) == "TOR · Rogers Centre"
+
+    def test_yesterday_prefixes_short_date(self):
+        w = self._w()
+        story = w._build_team_line(
+            venue="Rogers Centre",
+            attendance=41212,
+            capacity=46000,
+            weather=None,
+            day_label="6/12",
+        )
+        assert line_text(story) == "6/12 · TOR · Rogers Centre 41,212 (90%)"
+
+    def test_team_prefix_brand_color(self):
+        from led_ticker_baseball.teams import _team_color
+
+        w = self._w()
+        story = w._build_team_line(
+            venue="Rogers Centre",
+            attendance=None,
+            capacity=0,
+            weather=None,
+            day_label="",
+        )
+        prefix_c = story.segments[0][1]
+        tor = _team_color("TOR")
+        assert (prefix_c.red, prefix_c.green, prefix_c.blue) == (
+            tor.red,
+            tor.green,
+            tor.blue,
+        )

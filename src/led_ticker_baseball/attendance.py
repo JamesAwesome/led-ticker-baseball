@@ -257,3 +257,49 @@ class MLBAttendanceMonitor:
                 )
             )
         return stories
+
+    def _build_team_line(
+        self,
+        *,
+        venue: str,
+        attendance: int | None,
+        capacity: int,
+        weather: dict[str, Any] | None,
+        day_label: str,
+    ) -> SegmentMessage:
+        """The tracked team's single game line.
+
+        '[<6/12> · ]TOR · <venue>[ <att> (<pct>%)][ · <weather>]'. Attendance
+        appears only when known (Final); the percent only with a capacity; the
+        weather segment only when present. ``day_label`` prefixes the short date
+        on the yesterday fallback (empty string for today).
+        """
+        grey = make_color(150, 150, 150)
+        amber = make_color(255, 200, 60)
+        body_c = self._plain_body_color()
+
+        segments: list[tuple[str, Color | ColorProvider]] = []
+        if day_label:
+            segments.append((f"{day_label} · ", grey))
+        segments.append((f"{self.team} ", _team_color(self.team)))
+
+        venue_text = f"· {venue}" if venue else "·"
+        if attendance is not None:
+            pct = _fill_pct(attendance, capacity)
+            att_text = f" {attendance:,}" + (f" ({pct}%)" if pct is not None else "")
+            segments.append((venue_text, body_c))
+            segments.append((att_text, amber))
+        else:
+            segments.append((venue_text, body_c))
+
+        weather_text = _format_weather(weather)
+        if weather_text:
+            segments.append((f" · {weather_text}", body_c))
+
+        return SegmentMessage(
+            segments,
+            center=True,
+            bg_color=self.bg_color,
+            font=self.font,
+            font_color=self.font_color,
+        )
