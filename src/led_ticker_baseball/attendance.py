@@ -16,6 +16,20 @@ from typing import Any
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+_STAT_KEYS: tuple[str, ...] = (
+    "biggest_crowd",
+    "smallest_crowd",
+    "fullest",
+    "emptiest",
+)
+
+_STAT_LABELS: dict[str, str] = {
+    "biggest_crowd": "Biggest crowd",
+    "smallest_crowd": "Smallest crowd",
+    "fullest": "Fullest",
+    "emptiest": "Emptiest",
+}
+
 _DIGITS_RE: re.Pattern[str] = re.compile(r"\d")
 
 
@@ -87,3 +101,45 @@ def _parse_schedule_games(data: dict[str, Any]) -> list[GameVenue]:
                 )
             )
     return games
+
+
+@dataclass(frozen=True)
+class CrowdRecord:
+    value: int  # raw attendance for crowd stats, percent for fullest/emptiest
+    venue: str
+    home_abbr: str
+    is_pct: bool  # True → render value as "NN%"
+
+
+def _derive_superlatives(
+    pairs: list[tuple[GameVenue, int]], stats: list[str]
+) -> dict[str, CrowdRecord]:
+    """Best record per requested superlative over (game, attendance) pairs.
+
+    Crowd stats use raw attendance over all pairs; fullest/emptiest use
+    attendance/capacity over pairs with capacity > 0. Strict comparisons keep
+    the first pair on ties (schedule order).
+    """
+    records: dict[str, CrowdRecord] = {}
+
+    def consider(key: str, value: int, gv: GameVenue, *, lower: bool) -> None:
+        cur = records.get(key)
+        if cur is not None and (value >= cur.value if lower else value <= cur.value):
+            return
+        is_pct = key in ("fullest", "emptiest")
+        records[key] = CrowdRecord(
+            value=value, venue=gv.venue, home_abbr=gv.home_abbr, is_pct=is_pct
+        )
+
+    for gv, att in pairs:
+        if "biggest_crowd" in stats:
+            consider("biggest_crowd", att, gv, lower=False)
+        if "smallest_crowd" in stats:
+            consider("smallest_crowd", att, gv, lower=True)
+        pct = _fill_pct(att, gv.capacity)
+        if pct is not None:
+            if "fullest" in stats:
+                consider("fullest", pct, gv, lower=False)
+            if "emptiest" in stats:
+                consider("emptiest", pct, gv, lower=True)
+    return records

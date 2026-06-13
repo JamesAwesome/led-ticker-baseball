@@ -114,3 +114,76 @@ class TestParseScheduleGames:
 
     def test_empty_schedule(self):
         assert self._parse({"dates": []}) == []
+
+
+def sched_gv(pk, venue, home, capacity, away="OPP", state="Final"):
+    from led_ticker_baseball.attendance import GameVenue
+
+    return GameVenue(
+        game_pk=pk,
+        state=state,
+        game_number=1,
+        home_abbr=home,
+        away_abbr=away,
+        venue=venue,
+        capacity=capacity,
+    )
+
+
+class TestDeriveSuperlatives:
+    def _derive(self, pairs, stats=None):
+        from led_ticker_baseball.attendance import _STAT_KEYS, _derive_superlatives
+
+        return _derive_superlatives(pairs, list(stats or _STAT_KEYS))
+
+    def _pairs(self):
+        # (GameVenue, attendance) for three final games of varying fill.
+        return [
+            (sched_gv(1, "Dodger Stadium", "LAD", 56000), 45123),  # 81%
+            (sched_gv(2, "Wrigley Field", "CHC", 41649), 41600),  # ~100%
+            (sched_gv(3, "PNC Park", "PIT", 38753), 8201),  # 21%
+        ]
+
+    def test_biggest_and_smallest_crowd(self):
+        recs = self._derive(self._pairs())
+        assert recs["biggest_crowd"].value == 45123
+        assert recs["biggest_crowd"].venue == "Dodger Stadium"
+        assert recs["smallest_crowd"].value == 8201
+        assert recs["smallest_crowd"].venue == "PNC Park"
+
+    def test_fullest_and_emptiest_pct(self):
+        recs = self._derive(self._pairs())
+        assert recs["fullest"].value == 100  # 41600/41649
+        assert recs["fullest"].venue == "Wrigley Field"
+        assert recs["emptiest"].value == 21  # 8201/38753
+        assert recs["emptiest"].venue == "PNC Park"
+
+    def test_pct_skips_zero_capacity_but_crowd_counts_it(self):
+        pairs = [
+            (sched_gv(1, "PNC Park", "PIT", 38753), 20000),
+            (sched_gv(2, "Sutter Health", "ATH", 0), 9000),  # no capacity
+        ]
+        recs = self._derive(pairs)
+        # Smallest crowd still considers the no-capacity game...
+        assert recs["smallest_crowd"].value == 9000
+        # ...but emptiest/fullest only consider games with capacity.
+        assert recs["emptiest"].venue == "PNC Park"
+        assert recs["fullest"].venue == "PNC Park"
+
+    def test_record_carries_home_abbr(self):
+        recs = self._derive(self._pairs())
+        assert recs["biggest_crowd"].home_abbr == "LAD"
+
+    def test_tie_keeps_first(self):
+        pairs = [
+            (sched_gv(1, "A Park", "PIT", 40000), 30000),
+            (sched_gv(2, "B Park", "CHC", 40000), 30000),
+        ]
+        assert self._derive(pairs)["biggest_crowd"].venue == "A Park"
+
+    def test_unrequested_stats_not_derived(self):
+        recs = self._derive(self._pairs(), stats=["biggest_crowd"])
+        assert set(recs) == {"biggest_crowd"}
+
+    def test_empty_pairs(self):
+        assert self._derive([]) == {}
