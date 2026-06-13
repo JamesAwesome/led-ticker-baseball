@@ -9,7 +9,21 @@ gated on the (tiny) StatsAPI day schedule so off-hours refreshes skip the
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
+from zoneinfo import ZoneInfo
+
+import aiohttp
+import attrs
+from led_ticker.plugin import (
+    FONT_DEFAULT,
+    Color,
+    ColorProvider,
+    Font,
+    SegmentMessage,
+    TickerMessage,
+    colors,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -122,3 +136,67 @@ def _derive_records(
                 "slowest_pitch", r, _to_float(r, "release_speed"), "pitcher", lower=True
             )
     return records
+
+
+@attrs.define
+class MLBStatcastMonitor:
+    """League-wide daily Statcast superlatives."""
+
+    session: aiohttp.ClientSession
+    stats: list[str] = attrs.field(factory=lambda: list(_STAT_KEYS))
+    title: str = "Statcast"
+    timezone: str = "America/New_York"
+    padding: int = 6
+    hold_time: float = 0.0
+    bg_color: Color | None = attrs.field(default=None, kw_only=True)
+    font_color: Color | ColorProvider | None = attrs.field(default=None, kw_only=True)
+    font: Font = attrs.field(default=FONT_DEFAULT, kw_only=True)
+    _tz: ZoneInfo | None = attrs.field(init=False, default=None)
+    # (local date, Final-game count) at the last successful derive; None
+    # means no successful derive yet (first run, or the last update ended
+    # in an error/fallback state).
+    _last_derive: tuple[date, int] | None = attrs.field(init=False, default=None)
+    feed_title: TickerMessage | SegmentMessage | None = attrs.field(
+        init=False, default=None
+    )
+    feed_stories: list[TickerMessage | SegmentMessage] = attrs.field(
+        init=False, factory=list
+    )
+
+    def _body_color(self) -> Color | ColorProvider:
+        return self.font_color if self.font_color is not None else colors.RGB_WHITE
+
+    def _plain_body_color(self) -> Color | ColorProvider:
+        """Body-text color for per-segment use.
+
+        A plain-Color ``font_color`` tints body text while callout segments
+        (day label, amber value, team abbr) keep their colors. Providers
+        (``color_for``) can't color a single segment; they pass through
+        ``font_color=`` on the message instead, which overrides every
+        segment in core — same as the sibling widgets.
+        """
+        if self.font_color is not None and not hasattr(self.font_color, "color_for"):
+            return self.font_color
+        return colors.RGB_WHITE
+
+    def _set_title(self) -> None:
+        """League-wide title; no team color (there is no team)."""
+        self.feed_title = TickerMessage(
+            self.title,
+            font_color=self._body_color(),
+            center=True,
+            bg_color=self.bg_color,
+        )
+
+    def _should_skip(self, today: date, counts: tuple[int, int] | None) -> bool:
+        """Skip the 3 MB pull when nothing changed since the last derive.
+
+        Re-derive when: the gate fetch failed (fail open), no successful
+        derive exists yet, the local date rolled over, any game is live, or
+        the Final count moved.
+        """
+        if counts is None or self._last_derive is None:
+            return False
+        snap_day, snap_final = self._last_derive
+        live, final = counts
+        return snap_day == today and live == 0 and final == snap_final
