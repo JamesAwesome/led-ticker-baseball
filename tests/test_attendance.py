@@ -1,6 +1,7 @@
 """Tests for the MLB attendance widget (league superlatives + team mode)."""
 
 import datetime as dt
+import logging
 import unittest.mock as mock
 from zoneinfo import ZoneInfo
 
@@ -213,7 +214,9 @@ class TestSkeleton:
         assert w.stats == list(_STAT_KEYS)
 
     def test_team_mode_when_team_set(self):
-        assert make_widget(team="tor").team == "tor"  # not upper-cased until start()
+        # The field converter upper-cases at construction so the abbr matches
+        # the API regardless of build path.
+        assert make_widget(team="tor").team == "TOR"
 
     def test_default_title(self):
         w = make_widget()
@@ -548,3 +551,199 @@ class TestFallbackStates:
         w._team_id = 141
         await w._set_no_games_state(TODAY)
         assert w.feed_stories[0].text == "No games soon"
+
+
+def _freeze_today():
+    now = dt.datetime.now(NY)
+    frozen = mock.Mock(wraps=dt.datetime)
+    frozen.now.return_value = now
+    patcher = mock.patch("led_ticker_baseball.attendance.datetime", frozen)
+    return patcher, now.date()
+
+
+def feed(att=None, condition="Clear", temp="72", venue="Rogers Centre", cap=46000):
+    gi = {"attendance": att} if att is not None else {}
+    return {
+        "gameData": {
+            "gameInfo": gi,
+            "weather": {"condition": condition, "temp": temp, "wind": "5 mph"},
+            "venue": {"name": venue, "fieldInfo": {"capacity": cap}},
+        }
+    }
+
+
+class TestUpdateLeague:
+    def _widget(self, routes, **kwargs):
+        w = make_widget(session=make_session(routes), **kwargs)
+        w._tz = NY
+        return w
+
+    async def test_today_finals_build_superlatives(self):
+        patcher, today = _freeze_today()
+        sched = schedule(
+            sched_game(11, "Final", home="LAD", venue="Dodger Stadium", capacity=56000),
+            sched_game(22, "Final", home="PIT", venue="PNC Park", capacity=38753),
+        )
+        routes = {
+            "hydrate=venue(fieldInfo),team": sched,
+            "/game/11/boxscore": boxscore("45,123."),
+            "/game/22/boxscore": boxscore("8,201."),
+        }
+        w = self._widget(routes, stats=["biggest_crowd", "smallest_crowd"])
+        with patcher:
+            await w.update()
+        assert line_text(w.feed_stories[0]) == (
+            "Today · Biggest crowd 45,123 — Dodger Stadium"
+        )
+        assert line_text(w.feed_stories[1]) == (
+            "Today · Smallest crowd 8,201 — PNC Park"
+        )
+        assert w._last_derive == (today, 2)
+
+    async def test_no_finals_today_falls_back_to_yesterday(self):
+        patcher, today = _freeze_today()
+        yest = today - dt.timedelta(days=1)
+        empty = schedule(sched_game(1, "Preview"))
+        ysched = schedule(
+            sched_game(33, "Final", home="CHC", venue="Wrigley Field", capacity=41649)
+        )
+        # Route schedule by date param so today vs yesterday differ.
+        routes = {
+            f"date={today.isoformat()}": empty,
+            f"date={yest.isoformat()}": ysched,
+            "/game/33/boxscore": boxscore("41,600."),
+        }
+        w = self._widget(routes, stats=["biggest_crowd"])
+        with patcher:
+            await w.update()
+        assert line_text(w.feed_stories[0]).startswith(f"{yest.strftime('%-m/%-d')} · ")
+
+    async def test_error_sets_no_data(self):
+        patcher, today = _freeze_today()
+
+        def side_effect(url, *args, **kwargs):
+            if "/boxscore" in url:
+                raise RuntimeError("boxscore down")
+            return _ctx(schedule(sched_game(11, "Final")))
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        w = make_widget(session=session)
+        w._tz = NY
+        with patcher:
+            await w.update()
+        # A single boxscore failure is skipped (not fatal); with the only game's
+        # attendance unavailable, there are no superlatives → yesterday probe.
+        # Yesterday also empty here → no-games fallback.
+        assert w.feed_stories  # something rendered, not a crash
+
+
+class TestUpdateTeam:
+    def _widget(self, routes, **kwargs):
+        w = make_widget(session=make_session(routes), team="TOR", **kwargs)
+        w._tz = NY
+        w._team_id = 141
+        return w
+
+    async def test_team_final_line(self):
+        patcher, today = _freeze_today()
+        sched = schedule(
+            sched_game(
+                99,
+                "Final",
+                home="TOR",
+                away="BOS",
+                venue="Rogers Centre",
+                capacity=46000,
+            )
+        )
+        routes = {
+            "hydrate=venue(fieldInfo),team": sched,
+            "/game/99/feed/live": feed(att=41212),
+        }
+        w = self._widget(routes)
+        with patcher:
+            await w.update()
+        assert line_text(w.feed_stories[0]).startswith("TOR · Rogers Centre 41,212")
+
+    async def test_team_no_game_today_then_probe(self):
+        patcher, today = _freeze_today()
+        yest = today - dt.timedelta(days=1)
+        routes = {
+            f"date={today.isoformat()}": schedule(
+                sched_game(1, "Final", home="NYY", away="BOS")
+            ),
+            f"date={yest.isoformat()}": schedule(
+                sched_game(2, "Final", home="NYY", away="BOS")
+            ),
+            "startDate": {"dates": [{"date": "2026-06-20"}]},
+        }
+        w = self._widget(routes)
+        with patcher:
+            await w.update()
+        assert w.feed_stories[0].text == "Next game: Jun 20"
+        # No real data → snapshot stays None so the next tick re-derives
+        # (must not be overwritten to (today, 0) by update()).
+        assert w._last_derive is None
+
+    async def test_update_logs_info(self, caplog):
+        patcher, today = _freeze_today()
+        sched = schedule(sched_game(99, "Final", home="TOR", venue="Rogers Centre"))
+        routes = {
+            "hydrate=venue(fieldInfo),team": sched,
+            "/game/99/feed/live": feed(att=41212),
+        }
+        w = self._widget(routes)
+        with (
+            patcher,
+            caplog.at_level(logging.INFO, logger="led_ticker_baseball.attendance"),
+        ):
+            await w.update()
+        assert any(
+            r.levelno == logging.INFO and "attendance" in r.message.lower()
+            for r in caplog.records
+        )
+
+
+class TestStart:
+    async def test_league_mode_spawns_loop(self):
+        import led_ticker_baseball.attendance as mod
+        from led_ticker_baseball.attendance import MLBAttendanceMonitor
+
+        session = make_session({"hydrate=venue(fieldInfo),team": schedule()})
+        spawn = mock.Mock()
+        loop = mock.Mock(return_value="LOOP")
+        with (
+            mock.patch.object(mod, "spawn_tracked", spawn),
+            mock.patch.object(mod, "run_monitor_loop", loop),
+        ):
+            w = await MLBAttendanceMonitor.start(session, update_interval=55)
+        assert isinstance(w, MLBAttendanceMonitor)
+        assert w._tz is not None
+        assert w._team_id == 0  # league mode: no resolution
+        assert w.feed_stories
+        loop.assert_called_once_with(w, 55)
+        spawn.assert_called_once_with("LOOP")
+
+    async def test_team_mode_resolves_id(self):
+        import led_ticker_baseball.attendance as mod
+        from led_ticker_baseball.attendance import MLBAttendanceMonitor
+
+        routes = {
+            "/teams": {"teams": [{"id": 141, "abbreviation": "TOR"}]},
+            "hydrate=venue(fieldInfo),team": schedule(),
+            "startDate": {"dates": []},
+        }
+        session = make_session(routes)
+        spawn = mock.Mock()
+        loop = mock.Mock(return_value="LOOP")
+        with (
+            mock.patch.object(mod, "spawn_tracked", spawn),
+            mock.patch.object(mod, "run_monitor_loop", loop),
+        ):
+            w = await MLBAttendanceMonitor.start(
+                session, team="tor", update_interval=55
+            )
+        assert w.team == "TOR"
+        assert w._team_id == 141
+        spawn.assert_called_once_with("LOOP")

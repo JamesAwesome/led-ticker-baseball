@@ -9,11 +9,12 @@ weather, the boxscore carries the attendance string). Stateless: every refresh
 re-derives, schedule-gated so off-hours ticks are cheap.
 """
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, timedelta
-from typing import Any
+from datetime import date, datetime, timedelta
+from typing import Any, Self
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -27,11 +28,20 @@ from led_ticker.plugin import (
     TickerMessage,
     colors,
     make_color,
+    run_monitor_loop,
+    spawn_tracked,
 )
 
-from led_ticker_baseball.teams import _MLB_LIVE_API, MLB_API, _team_color
+from led_ticker_baseball.teams import (
+    _MLB_LIVE_API,
+    MLB_API,
+    _team_color,
+    resolve_team_id,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+_INTERVAL_THIRTY_MIN: int = 1800
 
 _STAT_KEYS: tuple[str, ...] = (
     "biggest_crowd",
@@ -167,7 +177,10 @@ class MLBAttendanceMonitor:
     """Ballpark attendance — league superlatives, or one team's game."""
 
     session: aiohttp.ClientSession
-    team: str = ""  # "" → league mode; else team mode
+    # "" → league mode; else team mode. Upper-cased at construction so the
+    # abbreviation matches the API regardless of how the widget is built
+    # (config coercion, start(), or a direct constructor in tests).
+    team: str = attrs.field(default="", converter=lambda v: v.upper() if v else "")
     stats: list[str] = attrs.field(factory=lambda: list(_STAT_KEYS))
     title: str = "Attendance"
     timezone: str = "America/New_York"
@@ -375,7 +388,7 @@ class MLBAttendanceMonitor:
         """
         start = today.isoformat()
         end = (today + timedelta(days=30)).isoformat()
-        team_q = f"&teamId={self._team_id}" if self.team else ""
+        team_q = f"&teamId={self._team_id}" if self._team_id else ""
         url = (
             f"{MLB_API}/schedule?sportId=1&startDate={start}&endDate={end}"
             f"&gameType=R{team_q}"
@@ -408,3 +421,113 @@ class MLBAttendanceMonitor:
             ),
         ]
         logger.info("MLB Attendance updated: fallback (%s)", text)
+
+    def _pick_team_game(self, games: list[GameVenue]) -> GameVenue | None:
+        """The tracked team's game for the day (doubleheader rule: Live first,
+        else gameNumber 2 when both Final, else gameNumber 1)."""
+        mine = [g for g in games if self.team in (g.home_abbr, g.away_abbr)]
+        if not mine:
+            return None
+        live = [g for g in mine if g.state == "Live"]
+        if live:
+            return live[0]
+        return max(mine, key=lambda g: g.game_number)
+
+    async def _league_pairs(
+        self, games: list[GameVenue]
+    ) -> list[tuple[GameVenue, int]]:
+        """Concurrent boxscore fetches for Final games; (game, attendance)
+        pairs, skipping games with no announced attendance."""
+        finals = [g for g in games if g.state == "Final"]
+        atts = await asyncio.gather(
+            *(self._fetch_attendance(g.game_pk) for g in finals)
+        )
+        return [(g, a) for g, a in zip(finals, atts, strict=True) if a is not None]
+
+    @classmethod
+    async def start(
+        cls,
+        session: aiohttp.ClientSession,
+        update_interval: int = _INTERVAL_THIRTY_MIN,
+        **kwargs: Any,
+    ) -> Self:
+        logger.debug("MLBAttendanceMonitor.start")
+        widget = cls(session=session, **kwargs)
+        widget._tz = ZoneInfo(widget.timezone)
+        if widget.team:  # already upper-cased by the field converter
+            widget._team_id = await resolve_team_id(session, widget.team) or 0
+        await widget.update()
+        logger.info("MLB Attendance: %d stories", len(widget.feed_stories))
+        spawn_tracked(run_monitor_loop(widget, update_interval))
+        return widget
+
+    async def update(self) -> None:
+        """Re-derive attendance (schedule-gated); league or team mode."""
+        tz = self._tz or ZoneInfo(self.timezone)
+        today = datetime.now(tz).date()
+        self._set_title()
+
+        games, counts = await self._fetch_schedule(today)
+        if self._should_skip(today, counts):
+            logger.debug("MLB Attendance: gate skip")
+            return
+
+        try:
+            if self.team:
+                derived = await self._update_team(today, games)
+            else:
+                derived = await self._update_league(today, games)
+        except Exception:
+            logger.exception("MLB Attendance fetch/derive error")
+            self._last_derive = None
+            self._set_error_state()
+            return
+
+        # Snapshot the gate key only when real data (today or yesterday) was
+        # rendered. The no-games/probe path leaves _last_derive None so the
+        # next tick re-derives once games appear — matching statcast.
+        self._last_derive = (today, counts[1]) if (derived and counts) else None
+
+    async def _update_league(self, today: date, games: list[GameVenue] | None) -> bool:
+        """Render league superlatives; True if real data (today/yesterday)."""
+        pairs = await self._league_pairs(games or [])
+        label = "Today"
+        if not pairs:
+            yest = today - timedelta(days=1)
+            ygames, _ = await self._fetch_schedule(yest)
+            pairs = await self._league_pairs(ygames or [])
+            label = yest.strftime("%-m/%-d")
+        if not pairs:
+            await self._set_no_games_state(today)
+            return False
+        records = _derive_superlatives(pairs, self.stats)
+        self.feed_stories = self._build_league_stories(records, label)
+        logger.info(
+            "MLB Attendance updated: %d stories (%s)", len(self.feed_stories), label
+        )
+        return True
+
+    async def _update_team(self, today: date, games: list[GameVenue] | None) -> bool:
+        """Render the tracked team's game line; True if a game was found."""
+        game = self._pick_team_game(games or [])
+        label = ""
+        if game is None:
+            yest = today - timedelta(days=1)
+            ygames, _ = await self._fetch_schedule(yest)
+            game = self._pick_team_game(ygames or [])
+            label = yest.strftime("%-m/%-d")
+        if game is None:
+            await self._set_no_games_state(today)
+            return False
+        att, weather, venue, cap = await self._fetch_game_data(game.game_pk)
+        self.feed_stories = [
+            self._build_team_line(
+                venue=venue or game.venue,
+                attendance=att,
+                capacity=cap or game.capacity,
+                weather=weather,
+                day_label=label,
+            )
+        ]
+        logger.info("MLB Attendance updated: team %s (%s)", self.team, label or "today")
+        return True
