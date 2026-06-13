@@ -269,3 +269,63 @@ class TestShouldSkip:
         w = make_widget()
         w._last_derive = (TODAY - dt.timedelta(days=1), 5)
         assert w._should_skip(TODAY, (0, 5)) is False
+
+
+def crowd_rec(value, venue="Dodger Stadium", home="LAD", is_pct=False):
+    from led_ticker_baseball.attendance import CrowdRecord
+
+    return CrowdRecord(value=value, venue=venue, home_abbr=home, is_pct=is_pct)
+
+
+def line_text(story):
+    return "".join(seg[0] for seg in story.segments)
+
+
+class TestBuildLeagueStories:
+    def test_crowd_line_format(self):
+        w = make_widget(stats=["biggest_crowd"])
+        recs = {"biggest_crowd": crowd_rec(45123)}
+        stories = w._build_league_stories(recs, "Today")
+        assert line_text(stories[0]) == "Today · Biggest crowd 45,123 — Dodger Stadium"
+
+    def test_pct_line_format(self):
+        w = make_widget(stats=["emptiest"])
+        recs = {"emptiest": crowd_rec(51, venue="PNC Park", home="PIT", is_pct=True)}
+        stories = w._build_league_stories(recs, "Today")
+        assert line_text(stories[0]) == "Today · Emptiest 51% — PNC Park"
+
+    def test_stats_order_controls_display(self):
+        w = make_widget(stats=["emptiest", "biggest_crowd"])
+        recs = {
+            "biggest_crowd": crowd_rec(45123),
+            "emptiest": crowd_rec(51, is_pct=True),
+        }
+        stories = w._build_league_stories(recs, "Today")
+        assert "Emptiest" in line_text(stories[0])
+        assert "Biggest crowd" in line_text(stories[1])
+
+    def test_missing_stat_omits_line(self):
+        w = make_widget()
+        stories = w._build_league_stories({"biggest_crowd": crowd_rec(45123)}, "Today")
+        assert len(stories) == 1
+
+    def test_colors_day_grey_value_amber_venue_branded(self):
+        w = make_widget(stats=["biggest_crowd"])
+        stories = w._build_league_stories({"biggest_crowd": crowd_rec(45123)}, "Today")
+        segs = stories[0].segments
+        day_c, value_c, venue_c = segs[0][1], segs[2][1], segs[-1][1]
+        assert (day_c.red, day_c.green, day_c.blue) == (150, 150, 150)
+        assert (value_c.red, value_c.green, value_c.blue) == (255, 200, 60)
+        from led_ticker_baseball.teams import _team_color
+
+        lad = _team_color("LAD")
+        assert (venue_c.red, venue_c.green, venue_c.blue) == (
+            lad.red,
+            lad.green,
+            lad.blue,
+        )
+
+    def test_stories_centered(self):
+        w = make_widget(stats=["biggest_crowd"])
+        stories = w._build_league_stories({"biggest_crowd": crowd_rec(45123)}, "Today")
+        assert stories[0].center is True

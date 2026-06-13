@@ -26,7 +26,10 @@ from led_ticker.plugin import (
     SegmentMessage,
     TickerMessage,
     colors,
+    make_color,
 )
+
+from led_ticker_baseball.teams import _team_color
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -215,3 +218,42 @@ class MLBAttendanceMonitor:
         snap_day, snap_final = self._last_derive
         live, final = counts
         return snap_day == today and live == 0 and final == snap_final
+
+    def _fmt_value(self, rec: CrowdRecord) -> str:
+        return f"{rec.value}%" if rec.is_pct else f"{rec.value:,}"
+
+    def _build_league_stories(
+        self, records: dict[str, CrowdRecord], day_label: str
+    ) -> list[TickerMessage | SegmentMessage]:
+        """One centered line per superlative.
+
+        Format: 'Today · Biggest crowd 45,123 — Dodger Stadium'. Day label
+        grey, value amber, venue in the home team's brand color. ``self.stats``
+        order is display order; missing stats are omitted.
+        """
+        grey = make_color(150, 150, 150)
+        amber = make_color(255, 200, 60)
+        body_c = self._plain_body_color()
+
+        stories: list[TickerMessage | SegmentMessage] = []
+        for key in self.stats:
+            rec = records.get(key)
+            if rec is None:
+                continue
+            segments: list[tuple[str, Color | ColorProvider]] = [
+                (f"{day_label} · ", grey),
+                (f"{_STAT_LABELS[key]} ", body_c),
+                (self._fmt_value(rec), amber),
+                (" — ", body_c),
+                (rec.venue, _team_color(rec.home_abbr)),
+            ]
+            stories.append(
+                SegmentMessage(
+                    segments,
+                    center=True,
+                    bg_color=self.bg_color,
+                    font=self.font,
+                    font_color=self.font_color,
+                )
+            )
+        return stories
