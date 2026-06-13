@@ -445,6 +445,43 @@ class MLBAttendanceMonitor:
         return [(g, a) for g, a in zip(finals, atts, strict=True) if a is not None]
 
     @classmethod
+    def validate_config(cls, cfg: dict[str, Any]) -> list[str]:
+        """Pre-coercion config check (returns messages, never raises). Same
+        contract as the sibling widgets."""
+        msgs: list[str] = []
+
+        team = cfg.get("team")
+        if team is not None and not isinstance(team, str):
+            msgs.append(f"attendance team={team!r} must be a string abbreviation.")
+
+        stats = cfg.get("stats")
+        if stats is not None:
+            stats_valid = isinstance(stats, list) and all(
+                isinstance(s, str) for s in stats
+            )
+            if not stats_valid:
+                msgs.append(
+                    f"attendance stats={stats!r} must be a list of strings, "
+                    f'e.g. stats = ["biggest_crowd"].'
+                )
+            else:
+                bad = [s for s in stats if s not in _STAT_KEYS]
+                if bad:
+                    names = ", ".join(repr(s) for s in bad)
+                    valid = ", ".join(repr(k) for k in _STAT_KEYS)
+                    msgs.append(
+                        f"attendance stats contains unknown key(s) {names}. "
+                        f"Valid keys: {valid}."
+                    )
+            if isinstance(team, str) and team:
+                msgs.append(
+                    "attendance stats is ignored when team is set "
+                    "(stats applies to league mode only)."
+                )
+
+        return msgs
+
+    @classmethod
     async def start(
         cls,
         session: aiohttp.ClientSession,

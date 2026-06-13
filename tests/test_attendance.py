@@ -747,3 +747,40 @@ class TestStart:
         assert w.team == "TOR"
         assert w._team_id == 141
         spawn.assert_called_once_with("LOOP")
+
+
+class TestValidateConfig:
+    def _v(self, cfg):
+        from led_ticker_baseball.attendance import MLBAttendanceMonitor
+
+        return MLBAttendanceMonitor.validate_config(cfg)
+
+    def test_empty_passes(self):
+        assert self._v({}) == []
+
+    def test_team_only_passes(self):
+        assert self._v({"team": "TOR"}) == []
+
+    def test_league_stats_pass(self):
+        assert self._v({"stats": ["fullest", "emptiest"]}) == []
+
+    def test_non_string_team_rejected(self):
+        msgs = self._v({"team": 42})
+        assert len(msgs) == 1
+        assert "team" in msgs[0]
+
+    def test_unknown_stat_named(self):
+        msgs = self._v({"stats": ["fullest", "rowdiest"]})
+        assert len(msgs) == 1
+        assert "rowdiest" in msgs[0]
+        assert "fullest" in msgs[0]  # valid keys listed
+
+    def test_non_list_stats_rejected(self):
+        msgs = self._v({"stats": "fullest"})
+        assert len(msgs) == 1
+        assert "stats" in msgs[0]
+
+    def test_stats_with_team_warns(self):
+        msgs = self._v({"team": "TOR", "stats": ["fullest"]})
+        assert len(msgs) == 1
+        assert "ignored" in msgs[0].lower()
