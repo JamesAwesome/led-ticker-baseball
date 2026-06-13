@@ -285,8 +285,8 @@ class TestBuildStatStories:
 
     def test_unresolved_name_drops_name_keeps_team(self):
         widget = make_widget(stats=["longest_hr"])
-        stories = widget._build_stat_stories({"longest_hr": rec(463)}, "Yest", {})
-        assert line_text(stories[0]) == "Yest · Longest HR 463 ft — TOR"
+        stories = widget._build_stat_stories({"longest_hr": rec(463)}, "6/12", {})
+        assert line_text(stories[0]) == "6/12 · Longest HR 463 ft — TOR"
 
     def test_colors_day_grey_value_amber_team_branded(self):
         from led_ticker_baseball.teams import _team_color
@@ -617,7 +617,9 @@ class TestUpdate:
         )
         with patcher:
             await widget.update()
-        assert line_text(widget.feed_stories[0]).startswith("Yest · ")
+        assert line_text(widget.feed_stories[0]).startswith(
+            f"{yest.strftime('%-m/%-d')} · "
+        )
 
     async def test_both_days_empty_routes_to_no_games(self):
         patcher, today = _freeze_today()

@@ -85,7 +85,7 @@ Segments and colors:
 
 | Segment | Color |
 | --- | --- |
-| `Today · ` / `Yest · ` | grey `make_color(150, 150, 150)` |
+| `Today · ` / `6/12 · ` (short date) | grey `make_color(150, 150, 150)` |
 | stat label (`Longest HR `) | white / plain `font_color` tint (same `_plain_body_color` semantics as promotions) |
 | value (`463 ft`, `101.8 mph`) | amber `make_color(255, 200, 60)` |
 | ` — <LastName> ` | white / plain `font_color` tint |
@@ -116,7 +116,7 @@ Rows missing the relevant value are skipped. Ties: first row wins (CSV order).
 | Condition | Display |
 | --- | --- |
 | Today's CSV yields ≥1 selected stat | `Today · …` lines |
-| Today empty (pre-game morning, postponed slate) | derive from yesterday's CSV, `Yest · …` labels |
+| Today empty (pre-game morning, postponed slate) | derive from yesterday's CSV, short-date (`6/12 · …`) labels |
 | Both days empty (off-day / offseason) | 30-day league schedule probe: first game date → `Next games: Mar 26`, else `No games soon` |
 | Fetch/parse failure | `No Data` |
 
@@ -195,7 +195,7 @@ routing by URL substring (same harness as `test_promotions.py`):
 - **Gating:** frozen clock (the `_freeze_today` pattern from the promotions
   tests); skip when nothing changed; re-derive on Live game, Final-count
   change, date rollover, empty stories; gate fetch failure fails open.
-- **Day fallback:** today empty → yesterday with `Yest` label; both empty →
+- **Day fallback:** today empty → yesterday with short-date label; both empty →
   probe (`Next games: <date>` / `No games soon`); fetch error → `No Data`.
 - **validate_config:** unknown stat key named; non-list `stats` rejected.
 - `test_smoke.py` asserts `baseball.statcast` registers; import purity

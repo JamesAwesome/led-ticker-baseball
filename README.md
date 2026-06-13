@@ -160,7 +160,8 @@ ball, and fastest/slowest pitch across all of MLB, re-derived through the day
 as games progress. One scrolling line per stat with the value in amber and the
 record holder's team abbreviation in its brand color:
 `Today · Longest HR 463 ft — Butler OAK`. Mornings fall back to yesterday's
-finals (`Yest · …`). Data comes from Baseball Savant's day CSV (an
+finals, labeled with the short date (`6/12 · …`). Data comes from Baseball
+Savant's day CSV (an
 undocumented endpoint — the widget refreshes at a polite default cadence and
 skips the pull entirely when no games are live or newly final).
 

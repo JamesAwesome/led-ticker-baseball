@@ -247,8 +247,9 @@ class MLBStatcastMonitor:
             records = await self._derive_day(today)
             label = "Today"
             if not records:
-                records = await self._derive_day(today - timedelta(days=1))
-                label = "Yest"
+                yesterday = today - timedelta(days=1)
+                records = await self._derive_day(yesterday)
+                label = yesterday.strftime("%-m/%-d")  # e.g. "6/12"
         except Exception:
             logger.exception("MLB Statcast fetch/derive error")
             self._last_derive = None
