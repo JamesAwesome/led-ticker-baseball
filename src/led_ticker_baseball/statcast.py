@@ -11,7 +11,7 @@ import csv
 import io
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -310,3 +310,57 @@ class MLBStatcastMonitor:
                 )
             )
         return stories
+
+    # Contract for the state setters below: they manage feed_stories only.
+    # update() calls _set_title() unconditionally before dispatching to any
+    # of them, so feed_title is always set — including on error paths.
+
+    def _set_error_state(self) -> None:
+        """Set display to error state."""
+        self.feed_stories = [
+            TickerMessage(
+                "No Data", font_color=self._body_color(), bg_color=self.bg_color
+            ),
+        ]
+        logger.info(
+            "MLB Statcast updated: %d stories (no data)", len(self.feed_stories)
+        )
+
+    async def _set_no_games_state(self, today: date) -> None:
+        """Off-day / offseason: probe 30 days for the next league game date.
+
+        Fallback lines are league-generic and self-explanatory, so they carry
+        no team prefix. A failed probe degrades to 'No games soon' silently.
+        """
+        start = today.isoformat()
+        end = (today + timedelta(days=30)).isoformat()
+        url = f"{MLB_API}/schedule?sportId=1&startDate={start}&endDate={end}&gameType=R"
+        data: dict[str, Any] = {}
+        try:
+            async with self.session.get(url) as resp:
+                data = await resp.json()
+        except Exception:
+            logger.debug("MLB Statcast probe failed")
+        next_date: date | None = None
+        for date_entry in data.get("dates", []):
+            raw = date_entry.get("date")
+            if not raw:
+                continue
+            try:
+                next_date = date.fromisoformat(raw)
+                break
+            except ValueError:
+                continue
+        if next_date is not None:
+            text = f"Next games: {next_date.strftime('%b %-d')}"
+        else:
+            text = "No games soon"
+        self.feed_stories = [
+            TickerMessage(
+                text,
+                font_color=self._body_color(),
+                center=True,
+                bg_color=self.bg_color,
+            ),
+        ]
+        logger.info("MLB Statcast updated: fallback (%s)", text)

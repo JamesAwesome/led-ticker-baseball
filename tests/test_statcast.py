@@ -445,3 +445,31 @@ class TestResolveNames:
         session.get.side_effect = RuntimeError("network down")
         widget = make_widget(session=session)
         assert await widget._resolve_names({10}) == {}
+
+
+class TestFallbackStates:
+    def test_error_state(self):
+        widget = make_widget()
+        widget._set_error_state()
+        assert widget.feed_stories[0].text == "No Data"
+
+    async def test_no_games_probe_finds_next_date(self):
+        session = make_session(
+            {"startDate": {"dates": [{"date": "2027-03-26"}, {"date": "2027-03-27"}]}}
+        )
+        widget = make_widget(session=session)
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "Next games: Mar 26"
+
+    async def test_no_games_probe_empty(self):
+        session = make_session({"startDate": {"dates": []}})
+        widget = make_widget(session=session)
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "No games soon"
+
+    async def test_no_games_probe_failure_degrades(self):
+        session = mock.MagicMock()
+        session.get.side_effect = RuntimeError("network down")
+        widget = make_widget(session=session)
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "No games soon"
