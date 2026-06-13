@@ -511,6 +511,33 @@ PEOPLE = {"people": [{"id": 11, "lastName": "Butler"}]}
 QUIET_SCHEDULE = {"dates": [{"games": [sched_game("Final")] * 3}]}
 
 
+class TestValidateConfig:
+    def _validate(self, cfg):
+        from led_ticker_baseball.statcast import MLBStatcastMonitor
+
+        return MLBStatcastMonitor.validate_config(cfg)
+
+    def test_clean_config_passes(self):
+        assert self._validate({"stats": ["longest_hr", "fastest_pitch"]}) == []
+
+    def test_stats_omitted_passes(self):
+        assert self._validate({}) == []
+
+    def test_unknown_key_named(self):
+        msgs = self._validate({"stats": ["longest_hr", "biggest_yeet"]})
+        assert len(msgs) == 1
+        assert "biggest_yeet" in msgs[0]
+        assert "longest_hr" in msgs[0]  # valid keys listed
+
+    def test_non_list_stats_rejected(self):
+        msgs = self._validate({"stats": "longest_hr"})
+        assert len(msgs) == 1
+        assert "stats" in msgs[0]
+
+    def test_messages_returned_not_raised(self):
+        assert isinstance(self._validate({"stats": 42}), list)
+
+
 class TestUpdate:
     def _widget(self, routes, **kwargs):
         widget = make_widget(session=make_session(routes), **kwargs)

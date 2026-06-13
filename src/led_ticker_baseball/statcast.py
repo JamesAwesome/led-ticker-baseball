@@ -188,6 +188,33 @@ class MLBStatcastMonitor:
     )
 
     @classmethod
+    def validate_config(cls, cfg: dict[str, Any]) -> list[str]:
+        """Pre-coercion config check, run by the engine via validate_widget_cfg.
+
+        Returns message strings (does NOT raise); the engine turns any
+        returned messages into a pre-flight ValueError. Same contract as the
+        sibling widgets.
+        """
+        msgs: list[str] = []
+        stats = cfg.get("stats")
+        if stats is None:
+            return msgs
+        if not isinstance(stats, list) or not all(isinstance(s, str) for s in stats):
+            msgs.append(
+                f"statcast stats={stats!r} must be a list of strings, "
+                f'e.g. stats = ["longest_hr"].'
+            )
+            return msgs
+        bad = [s for s in stats if s not in _STAT_KEYS]
+        if bad:
+            names = ", ".join(repr(s) for s in bad)
+            valid = ", ".join(repr(k) for k in _STAT_KEYS)
+            msgs.append(
+                f"statcast stats contains unknown key(s) {names}. Valid keys: {valid}."
+            )
+        return msgs
+
+    @classmethod
     async def start(
         cls,
         session: aiohttp.ClientSession,
