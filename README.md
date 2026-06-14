@@ -1,6 +1,6 @@
 # led-ticker-baseball
 
-MLB scores and standings widgets, a rolling-baseball sprite transition, and a `:baseball.ball:` emoji for [led-ticker](https://github.com/JamesAwesome/led-ticker). Live game data comes from MLB's free StatsAPI — no API key required.
+MLB scores, standings, promotions, Statcast, and attendance widgets, a rolling-baseball sprite transition, and a `:baseball.ball:` emoji for [led-ticker](https://github.com/JamesAwesome/led-ticker). Live game data comes from MLB's free StatsAPI — no API key required.
 
 ## Screenshots
 
@@ -9,6 +9,12 @@ MLB scores and standings widgets, a rolling-baseball sprite transition, and a `:
 ![baseball.standings — top-N plus tracked teams, each name in its brand color](docs/standings.gif)
 
 ![baseball.roll — rolling-baseball sprite transition between widgets](docs/roll-transition.gif)
+
+![baseball.promotions — upcoming home-game giveaways and theme nights, highlighted promos in amber](docs/promotions.gif)
+
+![baseball.statcast — league-wide daily superlatives (longest HR, hardest hit, fastest/slowest pitch)](docs/statcast.gif)
+
+![baseball.attendance — ballpark crowds and conditions; league superlatives or one team's game](docs/attendance.gif)
 
 The `:baseball.ball:` emoji (8×8 and the 32×32 hi-res upgrade on bigsign):
 
