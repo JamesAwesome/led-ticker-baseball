@@ -57,6 +57,29 @@ Per the `making-a-gif` skill, for each config:
   file is present in the led-ticker checkout before rendering (merge #209 first,
   or render from its branch).
 
+### Scheduling the render
+
+Because the captures depend on live data, the rendering of Deliverable A is
+**deferred to a scheduled run in the evening-ET window** (after a full slate of
+games has gone Final — roughly 11:30 PM ET / 03:30 UTC), when league-mode
+statcast/attendance have rich superlatives and team mode shows real
+attendance + fill %. A scheduled agent (set up via the `/schedule` skill) does,
+in the led-ticker checkout:
+
+1. Confirm `led_ticker_baseball` imports from the led-ticker venv (install
+   editable if not).
+2. For each of the three smoketest configs: `make plan-gif` → render with the
+   `making-a-gif` workflow → copy the GIF into this repo's `docs/`.
+3. Eyeball each GIF for non-empty, legible frames; if a config landed on a thin
+   slate, skip and let the next scheduled run retry rather than committing a
+   weak capture.
+4. Commit the GIFs onto the `docs-gifs-patterns` branch and report back.
+
+Deliverable B (the README prose) needs no live data and is authored
+immediately by the implementation plan; the scheduled run only supplies the
+GIF files and confirms the `## Screenshots` image links resolve. The PR is
+finalized once the GIFs land.
+
 ### README wiring
 
 Add to the `## Screenshots` section, after the existing three GIFs, in the
