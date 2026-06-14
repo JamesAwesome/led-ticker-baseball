@@ -63,9 +63,12 @@ class TestFormatWeather:
     def test_partial_weather_omits_missing_pieces(self):
         from led_ticker_baseball.attendance import _format_weather
 
-        # No wind → just temp + condition; no temp → condition only.
+        # No wind → just temp + condition; no temp → condition only;
+        # no condition → temp alone (not dropped).
         assert _format_weather({"condition": "Clear", "temp": "72"}) == "72° Clear"
         assert _format_weather({"condition": "Clear"}) == "Clear"
+        assert _format_weather({"temp": "72"}) == "72°"
+        assert _format_weather({"temp": "72", "wind": "5 mph"}) == "72°, wind 5 mph"
 
 
 def sched_game(
@@ -617,6 +620,49 @@ class TestUpdateLeague:
         with patcher:
             await w.update()
         assert line_text(w.feed_stories[0]).startswith(f"{yest.strftime('%-m/%-d')} · ")
+        # Today has a (Preview) game whose attendance is still pending, so the
+        # yesterday fallback must NOT durably snapshot — otherwise the gate
+        # would mask today's attendance once it is announced. _last_derive must
+        # stay None so the next tick re-derives.
+        assert w._last_derive is None
+
+    async def test_today_final_without_attendance_keeps_polling(self):
+        # Today's game is Final but its boxscore has no crowd yet → show
+        # yesterday but keep the gate open (no snapshot) so the late-arriving
+        # attendance is picked up rather than masked all day.
+        patcher, today = _freeze_today()
+        yest = today - dt.timedelta(days=1)
+        routes = {
+            f"date={today.isoformat()}": schedule(
+                sched_game(44, "Final", home="LAD", venue="Dodger Stadium")
+            ),
+            f"date={yest.isoformat()}": schedule(
+                sched_game(33, "Final", home="CHC", venue="Wrigley Field")
+            ),
+            "/game/44/boxscore": boxscore(None),  # today: no Att yet
+            "/game/33/boxscore": boxscore("41,600."),
+        }
+        w = self._widget(routes, stats=["biggest_crowd"])
+        with patcher:
+            await w.update()
+        assert line_text(w.feed_stories[0]).startswith(f"{yest.strftime('%-m/%-d')} · ")
+        assert w._last_derive is None  # keep re-deriving until today reports
+
+    async def test_today_finals_all_reported_snapshots(self):
+        # When every today Final has reported a crowd, the result is stable and
+        # the gate may snapshot.
+        patcher, today = _freeze_today()
+        routes = {
+            "hydrate=venue(fieldInfo),team": schedule(
+                sched_game(11, "Final", home="LAD", venue="Dodger Stadium")
+            ),
+            "/game/11/boxscore": boxscore("45,123."),
+        }
+        w = self._widget(routes, stats=["biggest_crowd"])
+        with patcher:
+            await w.update()
+        assert line_text(w.feed_stories[0]).startswith("Today · ")
+        assert w._last_derive == (today, 1)
 
     async def test_error_sets_no_data(self):
         patcher, today = _freeze_today()
@@ -661,6 +707,12 @@ class TestPickTeamGame:
         w = make_widget(team="TOR")
         games = [self._gv(1, "Final", 1), self._gv(2, "Live", 2)]
         assert w._pick_team_game(games).game_pk == 2
+
+    def test_doubleheader_final_game1_beats_unplayed_game2(self):
+        # Completed game 1 must not be masked by an unplayed (Preview) game 2.
+        w = make_widget(team="TOR")
+        games = [self._gv(1, "Final", 1), self._gv(2, "Preview", 2)]
+        assert w._pick_team_game(games).game_pk == 1
 
     def test_picks_team_on_either_side(self):
         w = make_widget(team="TOR")
@@ -718,9 +770,10 @@ class TestUpdateTeam:
         with patcher:
             await w.update()
         assert w.feed_stories[0].text == "Next game: Jun 20"
-        # No real data → snapshot stays None so the next tick re-derives
-        # (must not be overwritten to (today, 0) by update()).
-        assert w._last_derive is None
+        # The team has no game today, so the probe result is stable for the
+        # day → snapshot and gate-skip until the date rolls (or the slate
+        # changes). The today schedule had 1 Final game → count 1.
+        assert w._last_derive == (today, 1)
 
     async def test_update_logs_info(self, caplog):
         patcher, today = _freeze_today()
@@ -816,7 +869,14 @@ class TestValidateConfig:
         assert len(msgs) == 1
         assert "stats" in msgs[0]
 
-    def test_stats_with_team_warns(self):
-        msgs = self._v({"team": "TOR", "stats": ["fullest"]})
+    def test_stats_with_team_is_not_rejected(self):
+        # validate_config messages become a fatal pre-flight ValueError, so a
+        # valid stats list alongside team must NOT be flagged — team mode just
+        # ignores stats at runtime.
+        assert self._v({"team": "TOR", "stats": ["fullest"]}) == []
+
+    def test_bad_stats_still_rejected_even_with_team(self):
+        # An actually-invalid stats value is still caught regardless of mode.
+        msgs = self._v({"team": "TOR", "stats": ["rowdiest"]})
         assert len(msgs) == 1
-        assert "ignored" in msgs[0].lower()
+        assert "rowdiest" in msgs[0]

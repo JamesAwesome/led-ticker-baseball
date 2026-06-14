@@ -93,8 +93,9 @@ title = "Attendance"
 ```
 
 - `team` optional; case-insensitive; absent → league mode.
-- `stats` applies to league mode only (ignored, with a validate_config
-  warning, when `team` is set). Default = all four in the order above; list
+- `stats` applies to league mode only (silently ignored when `team` is set —
+  not flagged, since `validate_config` messages become fatal pre-flight
+  errors). Default = all four in the order above; list
   order is display order.
 - `update_interval` default 1800 s; the gate makes off-hours refreshes nearly
   free (one ~20 KB schedule call).
@@ -243,8 +244,9 @@ Classmethod, returns `list[str]`, never raises (sibling contract):
 - `team` present but not a string → message.
 - `stats` present but not a list of strings, or containing keys outside the
   four → message naming the bad key(s) and listing valid ones.
-- `stats` present together with `team` → message noting `stats` is ignored in
-  team mode (named, not silently dropped).
+- `stats` present together with `team` → NOT flagged. The engine turns any
+  returned message into a fatal `ValueError`, so warning here would reject an
+  otherwise-valid config; team mode just ignores `stats` at runtime.
 
 ## Docs
 
