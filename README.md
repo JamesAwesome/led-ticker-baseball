@@ -228,6 +228,92 @@ final yet, the widget shows yesterday's data (short-date labeled, e.g.
 `6/12 · …`); with no games at all it shows `Next game: Jun 20` (team) /
 `Next games: Jun 20` (league); a fetch failure shows `No Data`.
 
+## Common patterns
+
+Recipes that combine the widgets above. Each block shows just the
+baseball-specific keys — drop the widgets into a playlist section of your
+`config/config.toml` (see the [first-config tutorial](https://docs.ledticker.dev/tutorial/02-first-config/) for the surrounding structure).
+
+### My-team dashboard
+
+One team across every widget, rotating with the rolling-baseball transition.
+
+```toml
+[[playlist.section]]
+mode = "swap"
+transition = "baseball.roll_alternating"
+hold_time = 8
+
+[[playlist.section.widget]]
+type = "baseball.scores"
+team = "TOR"
+
+[[playlist.section.widget]]
+type = "baseball.standings"
+teams = ["TOR"]
+
+[[playlist.section.widget]]
+type = "baseball.promotions"
+team = "TOR"
+
+[[playlist.section.widget]]
+type = "baseball.attendance"
+team = "TOR"
+```
+
+Shows your team's current series, its place in the standings, its next
+home-game promotions, and the crowd and conditions at its game.
+
+### League roundup
+
+League-wide daily superlatives — omit `team` and both widgets run in league
+mode.
+
+```toml
+[[playlist.section]]
+mode = "swap"
+hold_time = 8
+scroll_step_ms = 35
+
+[[playlist.section.widget]]
+type = "baseball.statcast"
+
+[[playlist.section.widget]]
+type = "baseball.attendance"
+```
+
+Shows the day's longest home run, hardest-hit ball, and fastest and slowest
+pitch, then the biggest and smallest crowd and the fullest and emptiest park
+across all of MLB.
+
+### Gameday ticker
+
+A minimal single-team scrolling line.
+
+```toml
+[[playlist.section]]
+mode = "swap"
+hold_time = 6
+
+[[playlist.section.widget]]
+type = "baseball.scores"
+team = "NYY"
+```
+
+Shows just the tracked team's live, final, or upcoming game line.
+
+### Shared knobs
+
+- Every widget accepts the standard `title`, `font`, `font_color`, `bg_color`,
+  `padding`, and `timezone` options — see each widget's table above.
+- Put `:baseball.ball:` in a `[playlist.section.title]` message for a themed
+  header.
+- **Pacing** is tuned with `hold_time` (dwell before and after a line) and
+  `scroll_step_ms` (scroll cadence — lower is faster). These are
+  [led-ticker section settings](https://docs.ledticker.dev/), not plugin
+  options; they control how an overflowing line (common in the statcast,
+  attendance, and promotions widgets) reads on the panel.
+
 ## Team codes
 
 All 30 teams (shared by the scores, standings, and promotions widgets — statcast is league-wide):
