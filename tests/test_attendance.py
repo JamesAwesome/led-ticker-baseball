@@ -638,6 +638,42 @@ class TestUpdateLeague:
         assert w.feed_stories  # something rendered, not a crash
 
 
+class TestPickTeamGame:
+    def _gv(self, pk, state, game_number, home="TOR", away="BOS"):
+        from led_ticker_baseball.attendance import GameVenue
+
+        return GameVenue(
+            game_pk=pk,
+            state=state,
+            game_number=game_number,
+            home_abbr=home,
+            away_abbr=away,
+            venue="Rogers Centre",
+            capacity=46000,
+        )
+
+    def test_doubleheader_both_final_picks_game_two(self):
+        w = make_widget(team="TOR")
+        games = [self._gv(1, "Final", 1), self._gv(2, "Final", 2)]
+        assert w._pick_team_game(games).game_pk == 2
+
+    def test_doubleheader_live_wins_over_final(self):
+        w = make_widget(team="TOR")
+        games = [self._gv(1, "Final", 1), self._gv(2, "Live", 2)]
+        assert w._pick_team_game(games).game_pk == 2
+
+    def test_picks_team_on_either_side(self):
+        w = make_widget(team="TOR")
+        # Tracked team is the away side of the only game.
+        games = [self._gv(5, "Final", 1, home="BOS", away="TOR")]
+        assert w._pick_team_game(games).game_pk == 5
+
+    def test_no_team_game_returns_none(self):
+        w = make_widget(team="TOR")
+        games = [self._gv(9, "Final", 1, home="NYY", away="BOS")]
+        assert w._pick_team_game(games) is None
+
+
 class TestUpdateTeam:
     def _widget(self, routes, **kwargs):
         w = make_widget(session=make_session(routes), team="TOR", **kwargs)
