@@ -171,7 +171,8 @@ def _derive_records(
 
 @attrs.define
 class MLBStatcastMonitor:
-    """League-wide daily Statcast superlatives."""
+    """Daily Statcast superlatives — league-wide, or scoped to one team's
+    players via an optional ``team``."""
 
     session: aiohttp.ClientSession
     # "" → league-wide; else scope superlatives to that team's own players.

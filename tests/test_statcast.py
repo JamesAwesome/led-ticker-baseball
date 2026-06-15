@@ -1,4 +1,4 @@
-"""Tests for the MLB league-wide Statcast superlatives widget."""
+"""Tests for the MLB Statcast superlatives widget (league-wide + team filter)."""
 
 import datetime as dt
 import logging
@@ -595,6 +595,13 @@ class TestValidateConfigTeam:
 
     def test_team_plus_stats_passes(self):
         assert self._validate({"team": "PHI", "stats": ["longest_hr"]}) == []
+
+    def test_team_and_stats_messages_accumulate(self):
+        # Both a bad team and bad stats → two messages, neither raises.
+        msgs = self._validate({"team": 42, "stats": "longest_hr"})
+        assert len(msgs) == 2
+        assert any("team" in m for m in msgs)
+        assert any("stats" in m for m in msgs)
 
 
 class TestUpdate:
