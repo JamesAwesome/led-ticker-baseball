@@ -377,12 +377,14 @@ class MLBStatcastMonitor:
         day_label: str,
         names: dict[int, str],
     ) -> list[TickerMessage | SegmentMessage]:
-        """One centered line per stat: 'Today · Longest HR 463 ft — Butler OAK'.
+        """One centered line per stat.
 
-        Lines are self-contained (day label, stat, value, record holder, team
-        abbr in brand color) — stories scroll independently of the title.
-        ``self.stats`` order is display order; stats with no record are
-        omitted; an unresolved name degrades to value + team abbr.
+        League mode: 'Today · Longest HR 463 ft — Butler OAK' (trailing team
+        abbr in brand color). Team mode (``self.team`` set): the line leads with
+        the team abbr in brand color and drops the trailing abbr — the holder is
+        always the tracked team — e.g. 'PHI Today · Longest HR 472 ft — Schwarber'.
+        ``self.stats`` order is display order; stats with no record are omitted;
+        an unresolved name degrades to value only.
         """
         grey = make_color(150, 150, 150)  # grey — day label
         amber = make_color(255, 200, 60)  # amber — the record value
@@ -393,16 +395,21 @@ class MLBStatcastMonitor:
             record = records.get(key)
             if record is None:
                 continue
-            segments: list[tuple[str, Color | ColorProvider]] = [
-                (f"{day_label} · ", grey),
-                (f"{_STAT_LABELS[key]} ", body_c),
-                (_format_value(key, record.value), amber),
-            ]
+            segments: list[tuple[str, Color | ColorProvider]] = []
+            if self.team:
+                segments.append((f"{self.team} ", _team_color(self.team)))
+            segments.append((f"{day_label} · ", grey))
+            segments.append((f"{_STAT_LABELS[key]} ", body_c))
+            segments.append((_format_value(key, record.value), amber))
             if key == "slowest_pitch" and record.pitch_name:
                 segments.append((f" ({record.pitch_name})", body_c))
             name = names.get(record.person_id, "")
-            segments.append((f" — {name} " if name else " — ", body_c))
-            segments.append((record.team_abbr, _team_color(record.team_abbr)))
+            if self.team:
+                # Holder shown as bare name; team is implied by the prefix.
+                segments.append((f" — {name}" if name else " —", body_c))
+            else:
+                segments.append((f" — {name} " if name else " — ", body_c))
+                segments.append((record.team_abbr, _team_color(record.team_abbr)))
             stories.append(
                 SegmentMessage(
                     segments,

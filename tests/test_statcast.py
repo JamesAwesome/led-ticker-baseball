@@ -818,6 +818,57 @@ class TestTeamField:
         assert make_widget().team == ""
 
 
+class TestBuildStatStoriesTeamMode:
+    def test_team_line_leads_with_abbr_no_trailing(self):
+        widget = make_widget(team="PHI", stats=["longest_hr"])
+        records = {"longest_hr": rec(472, person_id=10, team="PHI")}
+        stories = widget._build_stat_stories(records, "Today", {10: "Schwarber"})
+        assert line_text(stories[0]) == "PHI Today · Longest HR 472 ft — Schwarber"
+
+    def test_team_prefix_in_brand_color(self):
+        from led_ticker_baseball.teams import _team_color
+
+        widget = make_widget(team="PHI", stats=["longest_hr"])
+        stories = widget._build_stat_stories(
+            {"longest_hr": rec(472, person_id=10, team="PHI")},
+            "Today",
+            {10: "Schwarber"},
+        )
+        prefix_c = stories[0].segments[0][1]
+        phi = _team_color("PHI")
+        assert (prefix_c.red, prefix_c.green, prefix_c.blue) == (
+            phi.red,
+            phi.green,
+            phi.blue,
+        )
+
+    def test_team_line_unresolved_name_degrades(self):
+        widget = make_widget(team="PHI", stats=["longest_hr"])
+        stories = widget._build_stat_stories(
+            {"longest_hr": rec(472, person_id=10, team="PHI")}, "6/14", {}
+        )
+        assert line_text(stories[0]) == "PHI 6/14 · Longest HR 472 ft —"
+
+    def test_team_slowest_pitch_keeps_pitch_name(self):
+        widget = make_widget(team="PHI", stats=["slowest_pitch"])
+        records = {
+            "slowest_pitch": rec(
+                68.0, person_id=31, team="PHI", pitch_name="Slow Curve"
+            )
+        }
+        stories = widget._build_stat_stories(records, "Today", {31: "Strahm"})
+        assert line_text(stories[0]) == (
+            "PHI Today · Slowest pitch 68.0 mph (Slow Curve) — Strahm"
+        )
+
+    def test_league_line_unchanged(self):
+        widget = make_widget(stats=["longest_hr"])  # no team
+        stories = widget._build_stat_stories(
+            {"longest_hr": rec(463, person_id=5, team="OAK")}, "Today", {5: "Butler"}
+        )
+        assert line_text(stories[0]) == "Today · Longest HR 463 ft — Butler OAK"
+
+
 class TestStart:
     async def test_resolves_tz_runs_update_and_spawns_loop(self):
         import led_ticker_baseball.statcast as mod
