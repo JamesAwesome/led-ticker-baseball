@@ -869,6 +869,61 @@ class TestBuildStatStoriesTeamMode:
         assert line_text(stories[0]) == "Today · Longest HR 463 ft — Butler OAK"
 
 
+class TestNoGamesStateTeamAware:
+    async def test_team_mode_says_next_game_with_teamid(self):
+        captured = {}
+
+        def side_effect(url, *args, **kwargs):
+            captured["url"] = url
+            return _ctx({"dates": [{"date": "2027-03-26"}]})
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session, team="PHI")
+        widget._team_id = 143
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "Next game: Mar 26"
+        assert "teamId=143" in captured["url"]
+
+    async def test_league_mode_says_next_games_no_teamid(self):
+        captured = {}
+
+        def side_effect(url, *args, **kwargs):
+            captured["url"] = url
+            return _ctx({"dates": [{"date": "2027-03-26"}]})
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session)  # league
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "Next games: Mar 26"
+        assert "teamId" not in captured["url"]
+
+
+class TestStartTeamMode:
+    async def test_team_mode_resolves_team_id(self):
+        import led_ticker_baseball.statcast as mod
+        from led_ticker_baseball.statcast import MLBStatcastMonitor
+
+        routes = {
+            "/teams": {"teams": [{"id": 143, "abbreviation": "PHI"}]},
+            "sportId=1&date=": {"dates": []},
+            "statcast_search": make_csv(),
+            "startDate": {"dates": []},
+        }
+        session = make_session(routes)
+        spawn = mock.Mock()
+        loop = mock.Mock(return_value="LOOP")
+        with (
+            mock.patch.object(mod, "spawn_tracked", spawn),
+            mock.patch.object(mod, "run_monitor_loop", loop),
+        ):
+            w = await MLBStatcastMonitor.start(session, team="phi", update_interval=55)
+        assert w.team == "PHI"
+        assert w._team_id == 143
+        spawn.assert_called_once_with("LOOP")
+
+
 class TestStart:
     async def test_resolves_tz_runs_update_and_spawns_loop(self):
         import led_ticker_baseball.statcast as mod

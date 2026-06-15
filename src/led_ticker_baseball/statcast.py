@@ -30,7 +30,7 @@ from led_ticker.plugin import (
     spawn_tracked,
 )
 
-from led_ticker_baseball.teams import MLB_API, _team_color
+from led_ticker_baseball.teams import MLB_API, _team_color, resolve_team_id
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -235,6 +235,8 @@ class MLBStatcastMonitor:
         logger.debug("MLBStatcastMonitor.start")
         widget = cls(session=session, **kwargs)
         widget._tz = ZoneInfo(widget.timezone)
+        if widget.team:  # upper-cased by the field converter
+            widget._team_id = await resolve_team_id(session, widget.team) or 0
         await widget.update()
         logger.info("MLB Statcast: %d stories", len(widget.feed_stories))
         spawn_tracked(run_monitor_loop(widget, update_interval))
@@ -437,14 +439,18 @@ class MLBStatcastMonitor:
         )
 
     async def _set_no_games_state(self, today: date) -> None:
-        """Off-day / offseason: probe 30 days for the next league game date.
+        """Off-day / offseason: probe 30 days for the next game date.
 
-        Fallback lines are league-generic and self-explanatory, so they carry
-        no team prefix. A failed probe degrades to 'No games soon' silently.
+        Team mode names the next game (``teamId``-scoped); league mode names the
+        next slate. A failed probe degrades to 'No games soon' silently.
         """
         start = today.isoformat()
         end = (today + timedelta(days=30)).isoformat()
-        url = f"{MLB_API}/schedule?sportId=1&startDate={start}&endDate={end}&gameType=R"
+        team_q = f"&teamId={self._team_id}" if self._team_id else ""
+        url = (
+            f"{MLB_API}/schedule?sportId=1&startDate={start}&endDate={end}"
+            f"&gameType=R{team_q}"
+        )
         data: dict[str, Any] = {}
         try:
             async with self.session.get(url) as resp:
@@ -461,10 +467,12 @@ class MLBStatcastMonitor:
                 break
             except ValueError:
                 continue
-        if next_date is not None:
-            text = f"Next games: {next_date.strftime('%b %-d')}"
-        else:
+        if next_date is None:
             text = "No games soon"
+        elif self.team:
+            text = f"Next game: {next_date.strftime('%b %-d')}"
+        else:
+            text = f"Next games: {next_date.strftime('%b %-d')}"
         self.feed_stories = [
             TickerMessage(
                 text,
