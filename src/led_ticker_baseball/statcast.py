@@ -122,12 +122,14 @@ class StatRecord:
 
 
 def _derive_records(
-    rows: list[dict[str, Any]], stats: list[str]
+    rows: list[dict[str, Any]], stats: list[str], team: str = ""
 ) -> dict[str, StatRecord]:
     """One pass over Savant rows → best record per requested stat key.
 
-    Strict comparisons keep the first row on ties (CSV order). Rows missing
-    the relevant value are skipped.
+    When ``team`` is set, only that team's own players qualify: the batter must
+    be on ``team`` for batting stats, the pitcher for pitch stats. Strict
+    comparisons keep the first row on ties (CSV order). Rows missing the
+    relevant value are skipped.
     """
     records: dict[str, StatRecord] = {}
 
@@ -140,6 +142,8 @@ def _derive_records(
         lower: bool = False,
     ) -> None:
         if value is None:
+            return
+        if team and _row_team(r, who) != team:
             return
         cur = records.get(key)
         if cur is not None and (value >= cur.value if lower else value <= cur.value):
@@ -170,6 +174,9 @@ class MLBStatcastMonitor:
     """League-wide daily Statcast superlatives."""
 
     session: aiohttp.ClientSession
+    # "" → league-wide; else scope superlatives to that team's own players.
+    # Upper-cased at construction so the abbr matches the API on any build path.
+    team: str = attrs.field(default="", converter=lambda v: v.upper() if v else "")
     stats: list[str] = attrs.field(factory=lambda: list(_STAT_KEYS))
     title: str = "Statcast"
     timezone: str = "America/New_York"
@@ -179,6 +186,7 @@ class MLBStatcastMonitor:
     font_color: Color | ColorProvider | None = attrs.field(default=None, kw_only=True)
     font: Font = attrs.field(default=FONT_DEFAULT, kw_only=True)
     _tz: ZoneInfo | None = attrs.field(init=False, default=None)
+    _team_id: int = attrs.field(init=False, default=0)
     # (local date, Final-game count) at the last successful derive; None
     # means no successful derive yet (first run, or the last update ended
     # in an error/fallback state).
@@ -343,7 +351,7 @@ class MLBStatcastMonitor:
             resp.raise_for_status()
             text = await resp.text()
         rows = list(csv.DictReader(io.StringIO(text.lstrip("﻿"))))
-        return _derive_records(rows, self.stats)
+        return _derive_records(rows, self.stats, self.team)
 
     async def _resolve_names(self, person_ids: set[int]) -> dict[int, str]:
         """Batched StatsAPI lookup: person id → last name; {} on failure."""

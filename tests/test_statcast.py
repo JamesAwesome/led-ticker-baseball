@@ -759,6 +759,65 @@ class TestBgColor:
         assert widget.feed_stories[0].bg_color is bg
 
 
+class TestDeriveRecordsTeamFilter:
+    def _derive(self, rows, stats, team=""):
+        from led_ticker_baseball.statcast import _derive_records
+
+        return _derive_records(rows, list(stats), team)
+
+    def test_longest_hr_only_counts_team_batter(self):
+        rows = [
+            # Opponent (TOR) hits the longer HR but must be excluded.
+            hr(470, batter=99, away_team="TOR", home_team="PHI", inning_topbot="Top"),
+            # Phillies batter (away on Top) HR.
+            hr(450, batter=11, away_team="PHI", home_team="NYM", inning_topbot="Top"),
+        ]
+        rec = self._derive(rows, ["longest_hr"], team="PHI")["longest_hr"]
+        assert rec.value == 450.0
+        assert rec.person_id == 11
+        assert rec.team_abbr == "PHI"
+
+    def test_fastest_pitch_only_counts_team_pitcher(self):
+        rows = [
+            # Phillies pitcher (home team on Top) throws 99.
+            row(release_speed=99.0, pitcher=21, home_team="PHI", inning_topbot="Top"),
+            # Opponent pitcher throws harder but excluded.
+            row(release_speed=103.0, pitcher=88, home_team="NYM", inning_topbot="Top"),
+        ]
+        rec = self._derive(rows, ["fastest_pitch"], team="PHI")["fastest_pitch"]
+        assert rec.value == 99.0
+        assert rec.person_id == 21
+
+    def test_no_team_event_omits_stat(self):
+        rows = [
+            hr(470, batter=99, away_team="TOR", home_team="NYM", inning_topbot="Top")
+        ]
+        assert "longest_hr" not in self._derive(rows, ["longest_hr"], team="PHI")
+
+    def test_savant_abbr_normalized_in_filter(self):
+        # Savant 'AZ' batter matches team='ARI'.
+        rows = [hr(440, batter=7, away_team="AZ", home_team="LAD", inning_topbot="Top")]
+        rec = self._derive(rows, ["longest_hr"], team="ARI")["longest_hr"]
+        assert rec.person_id == 7
+
+    def test_empty_team_is_league_wide(self):
+        # team="" → unchanged: the longest HR wins regardless of team.
+        rows = [
+            hr(470, batter=99, away_team="TOR", home_team="PHI", inning_topbot="Top"),
+            hr(450, batter=11, away_team="PHI", home_team="NYM", inning_topbot="Top"),
+        ]
+        rec = self._derive(rows, ["longest_hr"], team="")["longest_hr"]
+        assert rec.value == 470.0
+
+
+class TestTeamField:
+    def test_team_upper_cased_at_construction(self):
+        assert make_widget(team="phi").team == "PHI"
+
+    def test_default_is_league_mode(self):
+        assert make_widget().team == ""
+
+
 class TestStart:
     async def test_resolves_tz_runs_update_and_spawns_loop(self):
         import led_ticker_baseball.statcast as mod
