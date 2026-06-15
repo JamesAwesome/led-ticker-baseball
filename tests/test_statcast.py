@@ -579,6 +579,24 @@ class TestValidateConfig:
         assert isinstance(self._validate({"stats": 42}), list)
 
 
+class TestValidateConfigTeam:
+    def _validate(self, cfg):
+        from led_ticker_baseball.statcast import MLBStatcastMonitor
+
+        return MLBStatcastMonitor.validate_config(cfg)
+
+    def test_string_team_passes(self):
+        assert self._validate({"team": "PHI"}) == []
+
+    def test_non_string_team_rejected(self):
+        msgs = self._validate({"team": 42})
+        assert len(msgs) == 1
+        assert "team" in msgs[0]
+
+    def test_team_plus_stats_passes(self):
+        assert self._validate({"team": "PHI", "stats": ["longest_hr"]}) == []
+
+
 class TestUpdate:
     def _widget(self, routes, **kwargs):
         widget = make_widget(session=make_session(routes), **kwargs)

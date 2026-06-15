@@ -207,6 +207,9 @@ class MLBStatcastMonitor:
         sibling widgets.
         """
         msgs: list[str] = []
+        team = cfg.get("team")
+        if team is not None and not isinstance(team, str):
+            msgs.append(f"statcast team={team!r} must be a string abbreviation.")
         stats = cfg.get("stats")
         if stats is None:
             return msgs
