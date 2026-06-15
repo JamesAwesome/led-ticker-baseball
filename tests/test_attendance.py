@@ -525,6 +525,24 @@ class TestFallbackStates:
         w._set_error_state()
         assert w.feed_stories[0].text == "No Data"
 
+    async def test_team_set_but_unresolved_says_next_games(self):
+        # team configured but id failed to resolve (_team_id == 0): the label
+        # and the (absent) teamId query must agree — league fallback, not a
+        # mislabeled "Next game" over a league-wide date.
+        captured = {}
+
+        def side_effect(url, *args, **kwargs):
+            captured["url"] = url
+            return _ctx({"dates": [{"date": "2027-03-26"}]})
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session, team="TOR")
+        widget._team_id = 0  # resolve failed
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "Next games: Mar 26"
+        assert "teamId" not in captured["url"]
+
     async def test_probe_finds_next_game_team_mode(self):
         # Team mode → "Next game: <date>".
         session = make_session({"startDate": {"dates": [{"date": "2027-03-26"}]}})
