@@ -442,6 +442,19 @@ class TestDeriveDay:
         assert "game_date_gt=2026-06-11" in url
         assert "game_date_lt=2026-06-11" in url
 
+    async def test_league_mode_pulls_unscoped_csv(self):
+        session = make_session({"statcast_search": make_csv()})
+        widget = make_widget(session=session)  # no team
+        await widget._derive_day(dt.date(2026, 6, 11))
+        assert "hfTeam" not in session.get.call_args_list[0].args[0]
+
+    async def test_team_mode_scopes_csv_server_side(self):
+        session = make_session({"statcast_search": make_csv()})
+        widget = make_widget(session=session, team="PHI")
+        await widget._derive_day(dt.date(2026, 6, 11))
+        # Savant team scope: hfTeam=PHI| (pipe url-encoded).
+        assert "hfTeam=PHI%7C" in session.get.call_args_list[0].args[0]
+
 
 class TestResolveNames:
     async def test_resolves_last_names(self):
@@ -920,6 +933,24 @@ class TestNoGamesStateTeamAware:
         session = mock.MagicMock()
         session.get.side_effect = side_effect
         widget = make_widget(session=session)  # league
+        await widget._set_no_games_state(TODAY)
+        assert widget.feed_stories[0].text == "Next games: Mar 26"
+        assert "teamId" not in captured["url"]
+
+    async def test_team_set_but_unresolved_degrades_to_next_games(self):
+        # team configured but id failed to resolve (_team_id == 0): the label
+        # and the (absent) teamId query must agree — honest league fallback,
+        # not a mislabeled "Next game" over a league-wide date.
+        captured = {}
+
+        def side_effect(url, *args, **kwargs):
+            captured["url"] = url
+            return _ctx({"dates": [{"date": "2027-03-26"}]})
+
+        session = mock.MagicMock()
+        session.get.side_effect = side_effect
+        widget = make_widget(session=session, team="PHI")
+        widget._team_id = 0  # resolve failed
         await widget._set_no_games_state(TODAY)
         assert widget.feed_stories[0].text == "Next games: Mar 26"
         assert "teamId" not in captured["url"]

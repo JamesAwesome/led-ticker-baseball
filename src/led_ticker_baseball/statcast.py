@@ -1,10 +1,12 @@
-"""MLB league-wide Statcast superlatives widget.
+"""MLB Statcast superlatives widget — league-wide or scoped to one team.
 
 Derives the day's longest home run, hardest-hit ball, and fastest/slowest
 pitch from Baseball Savant's day CSV — an undocumented website endpoint, so
 requests carry a User-Agent and the default refresh is a polite 30 minutes,
 gated on the (tiny) StatsAPI day schedule so off-hours refreshes skip the
-3 MB pull. Stateless: every refresh re-derives from the full day so far.
+pull. With ``team`` set, the CSV is scoped server-side to that team's games
+and the superlatives to its own players. Stateless: every refresh re-derives
+from the full day so far.
 """
 
 import csv
@@ -30,7 +32,12 @@ from led_ticker.plugin import (
     spawn_tracked,
 )
 
-from led_ticker_baseball.teams import MLB_API, _team_color, resolve_team_id
+from led_ticker_baseball.teams import (
+    API_TO_CANONICAL_ABBR,
+    MLB_API,
+    _team_color,
+    resolve_team_id,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -60,12 +67,6 @@ _STAT_LABELS: dict[str, str] = {
     "fastest_pitch": "Fastest pitch",
     "slowest_pitch": "Slowest pitch",
 }
-
-# Baseball Savant uses a few team codes that differ from the StatsAPI
-# abbreviations the rest of the plugin (scores/standings/teams.py) speaks.
-# Normalize them so the displayed abbr and team color match the other
-# widgets — ATH→OAK (Athletics), AZ→ARI (D-backs).
-_SAVANT_ABBR: dict[str, str] = {"ATH": "OAK", "AZ": "ARI"}
 
 
 def _to_float(row: dict[str, Any], key: str) -> float | None:
@@ -103,7 +104,9 @@ def _row_team(row: dict[str, Any], who: str) -> str:
     else:
         team = row.get("home_team") if batting_away else row.get("away_team")
     team = team or ""
-    return _SAVANT_ABBR.get(team, team)
+    # Savant emits ATH/AZ; normalize to the plugin's canonical OAK/ARI so the
+    # filter, team color, and config code all agree (single map in teams.py).
+    return API_TO_CANONICAL_ABBR.get(team, team)
 
 
 def _format_value(key: str, value: float) -> str:
@@ -344,6 +347,11 @@ class MLBStatcastMonitor:
         ships a UTF-8 BOM; strip it before DictReader sees the header row.
         """
         url = SAVANT_CSV_URL.format(day=day.isoformat())
+        if self.team:
+            # Scope the pull to the team's games server-side (~24x smaller).
+            # The CSV still includes the opponent's rows, so the client-side
+            # _row_team filter in _derive_records stays necessary and correct.
+            url += f"&hfTeam={self.team}%7C"
         async with self.session.get(
             url,
             headers={"User-Agent": _USER_AGENT},
@@ -471,9 +479,13 @@ class MLBStatcastMonitor:
                 break
             except ValueError:
                 continue
+        # Gate the label on the SAME condition as the teamId query (_team_id),
+        # not on self.team — so a team whose id failed to resolve degrades
+        # honestly to the league "Next games" instead of mislabeling a
+        # league-wide date as the team's "Next game".
         if next_date is None:
             text = "No games soon"
-        elif self.team:
+        elif self._team_id:
             text = f"Next game: {next_date.strftime('%b %-d')}"
         else:
             text = f"Next games: {next_date.strftime('%b %-d')}"
