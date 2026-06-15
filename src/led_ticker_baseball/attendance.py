@@ -34,6 +34,7 @@ from led_ticker.plugin import (
 
 from led_ticker_baseball.teams import (
     _MLB_LIVE_API,
+    API_TO_CANONICAL_ABBR,
     MLB_API,
     _team_color,
     resolve_team_id,
@@ -117,13 +118,15 @@ def _parse_schedule_games(data: dict[str, Any]) -> list[GameVenue]:
             home = teams.get("home", {}).get("team", {})
             away = teams.get("away", {}).get("team", {})
             venue = g.get("venue", {})
+            home_raw = home.get("abbreviation", "")
+            away_raw = away.get("abbreviation", "")
             games.append(
                 GameVenue(
                     game_pk=g.get("gamePk", 0),
                     state=g.get("status", {}).get("abstractGameState", "Preview"),
                     game_number=g.get("gameNumber", 1),
-                    home_abbr=home.get("abbreviation", ""),
-                    away_abbr=away.get("abbreviation", ""),
+                    home_abbr=(API_TO_CANONICAL_ABBR.get(home_raw) or home_raw),
+                    away_abbr=(API_TO_CANONICAL_ABBR.get(away_raw) or away_raw),
                     venue=venue.get("name", ""),
                     capacity=venue.get("fieldInfo", {}).get("capacity", 0) or 0,
                 )
